@@ -1,0 +1,20 @@
+.{
+    .name = .lmdb,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.15.0-dev.1195+f34b4780b",
+    .fingerprint = 0xb2966103c93c00da,
+
+    .paths = .{
+        "src",
+        "build.zig",
+        "build.zig.zon",
+        "LICENSE",
+    },
+
+    .dependencies = .{
+        .upstream = .{
+            .url = "git+https://git.openldap.org/openldap/openldap/?ref=mdb.master#14d6629bc8a9fe40d8a6bee1bf71c45afe7576b6",
+            .hash = "N-V-__8AABzgCAC6yX-gYcngpmRFF74ZANIAhphOalO6yoyI",
+        },
+    },
+}
