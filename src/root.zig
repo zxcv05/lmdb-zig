@@ -83,5 +83,5 @@ test {
     );
 
     std.testing.refAllDeclsRecursive(@This());
-    std.testing.refAllDeclsRecursive(@import("behavior_tests.zig"));
+    std.testing.refAllDecls(@import("behavior_tests.zig"));
 }

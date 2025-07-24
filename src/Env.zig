@@ -37,7 +37,7 @@ pub fn init(path: [:0]const u8, options: InitOptions) !Env {
     // open db
 
     var flags_int: c_uint = 0;
-    inline for (std.meta.fields(Flags)) |flag| {
+    inline for (std.meta.fields(InitFlags)) |flag| {
         if (@field(options.flags, flag.name))
             flags_int |= @field(root.all_flags, flag.name);
     }
@@ -80,8 +80,14 @@ pub fn sync(this: Env, force: bool) !void {
     }
 }
 
-pub fn transaction(this: Env, access: Txn.Access, flags: Txn.Flags) !Txn {
+/// Create a transaction
+pub fn begin(this: Env, access: Txn.Access, flags: Txn.InitFlags) !Txn {
     return Txn.init(this, null, access, flags);
+}
+
+/// Create a nested transaction
+pub fn begin_nested(this: Env, parent: *const Txn, access: Txn.Access, flags: Txn.InitFlags) !Txn {
+    return Txn.init(this, parent, access, flags);
 }
 
 /// See `http://www.lmdb.tech/doc/group__mdb.html#ga5040d0de1f14000fa01fc0b522ff1f86`
@@ -114,11 +120,17 @@ pub fn get_fd(this: Env) std.posix.fd_t {
     return fd;
 }
 
-pub const CopyFlags = packed struct {
-    cp_compact: bool = false,
+pub const InitOptions = struct {
+    /// if db doesnt exist, lmdb will create it with this mode (ignored on windows)
+    mode: std.posix.mode_t = 0o664,
+    flags: InitFlags = .{},
+
+    max_readers: ?usize = null,
+    map_size: ?usize = null,
+    max_dbs: ?usize = null,
 };
 
-pub const Flags = packed struct {
+pub const InitFlags = packed struct {
     no_subdir: bool = false,
     read_only: bool = false,
     fixed_map: bool = false,
@@ -133,12 +145,6 @@ pub const Flags = packed struct {
     previous_snapshot: bool = false,
 };
 
-pub const InitOptions = struct {
-    /// if db doesnt exist, lmdb will create it with this mode (ignored on windows)
-    mode: std.posix.mode_t = 0o664,
-    flags: Flags = .{},
-
-    max_readers: ?usize = null,
-    map_size: ?usize = null,
-    max_dbs: ?usize = null,
+pub const CopyFlags = packed struct {
+    cp_compact: bool = false,
 };

@@ -6,17 +6,21 @@ const c = @import("c");
 
 const Env = @import("Env.zig");
 
+// todo: track state to catch lmdb bugs/limitations at runtime
+// - track transaction children, warn if deinit before all (children.done == true)
+// - track access to ensure calls to cursor operations or reset_renew() are valid
+
 const Txn = @This();
 
 inner: *c.MDB_txn,
 done: bool = false,
 
-/// Create new transaction
-pub fn init(env: Env, parent: ?*Txn, access: Access, flags: Flags) !Txn {
+/// Create new transaction - See `Env.begin*(...)`
+pub fn init(env: Env, parent: ?*const Txn, access: Access, flags: InitFlags) !Txn {
     if (parent) |ptxn| std.debug.assert(!ptxn.done);
 
     var flags_int: c_uint = 0;
-    inline for (std.meta.fields(Flags)) |flag| {
+    inline for (std.meta.fields(InitFlags)) |flag| {
         if (@field(flags, flag.name))
             flags_int |= @field(root.all_flags, flag.name);
     }
@@ -80,7 +84,7 @@ pub const Access = enum {
     read_write,
 };
 
-pub const Flags = packed struct {
+pub const InitFlags = packed struct {
     no_sync: bool = false,
     no_meta_sync: bool = false,
 };

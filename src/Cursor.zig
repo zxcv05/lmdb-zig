@@ -22,7 +22,7 @@ pub fn renew(this: Cursor, txn: Txn) void {
     if (c.mdb_cursor_renew(txn.inner, this.inner) != @intFromEnum(root.E.SUCCESS)) unreachable;
 }
 
-pub fn get(this: Cursor, key: []const u8, data: ?[]const u8, op: GetOp) !?Kv {
+pub fn get(this: Cursor, op: GetOp, key: ?[]const u8, data: ?[]const u8) !?Kv {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
@@ -89,28 +89,28 @@ pub const Kv = struct {
 
 pub const GetOp = enum(c_uint) {
     first,
-    /// need dupsort
+    /// need dup_sort
     first_dup,
-    /// need dupsort
+    /// need dup_sort
     get_both,
-    /// need dupsort
+    /// need dup_sort
     get_both_range,
     get_current,
-    /// need dupsort+dupfixed
+    /// need dup_sort + dup_fixed
     get_multiple,
     last,
-    /// need dupsort
+    /// need dup_sort
     last_dup,
     next,
-    /// need dupsort
+    /// need dup_sort
     next_dup,
-    /// need dupsort+dupfixed
+    /// need dup_sort + dup_fixed
     next_multiple,
     next_nodup,
     prev,
-    /// need dupsort
+    /// need dup_sort
     prev_dup,
-    /// need dupsort+dupfixed
+    /// need dup_sort + dup_fixed
     prev_multiple,
     prev_nodup,
     set,

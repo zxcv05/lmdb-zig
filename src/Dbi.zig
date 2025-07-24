@@ -13,9 +13,9 @@ const Dbi = @This();
 
 handle: c.MDB_dbi,
 
-pub fn init(txn: Txn, name: ?[:0]const u8, flags: Flags) !Dbi {
+pub fn init(txn: Txn, name: ?[:0]const u8, flags: InitFlags) !Dbi {
     var flags_int: c_uint = 0;
-    inline for (std.meta.fields(Flags)) |flag| {
+    inline for (std.meta.fields(InitFlags)) |flag| {
         if (@field(flags, flag.name))
             flags_int |= @field(root.all_flags, flag.name);
     }
@@ -140,7 +140,7 @@ pub fn cursor(this: Dbi, txn: Txn) Cursor {
     return .{ .inner = ptr.? };
 }
 
-pub const Flags = packed struct {
+pub const InitFlags = packed struct {
     reverse_key: bool = false,
     dup_sort: bool = false,
     integer_key: bool = false,

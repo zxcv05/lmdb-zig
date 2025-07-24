@@ -22,8 +22,8 @@ pub inline fn from(maybe_slice: ?[]u8) Val {
 }
 
 /// Same as `from` but with a const slice
-pub inline fn from_const(slice: ?[]const u8) Val {
-    return from(@constCast(slice));
+pub inline fn from_const(maybe_slice: ?[]const u8) Val {
+    return from(@constCast(maybe_slice));
 }
 
 /// For use with `Dbi.put*` with the `reserve` flag set
@@ -39,24 +39,27 @@ pub inline fn alias(this: *const Val) ?*c.MDB_val {
     return @constCast(&this.data);
 }
 
-/// return a slice where MDB_val is pointing to
-/// asserts non-null
-pub inline fn unalias(this: Val) []u8 {
-    return this.unalias_maybe().?;
-}
+//
 
-/// Same as `unalias` but the return value is a const slice
-pub inline fn unalias_const(this: Val) []const u8 {
-    return this.unalias();
-}
-
-/// Same as `unalias` except
+/// Unwraps the MDB_val struct into a slice, if possible
 pub inline fn unalias_maybe(this: Val) ?[]u8 {
+    if (this.data.mv_size == 0 or @intFromPtr(this.data.mv_data) == 0) return null;
+
     const ptr: [*]u8 = @ptrCast(this.data.mv_data);
     return ptr[0..this.data.mv_size];
 }
 
-/// Same as `unalias_maybe` but the return value is a const slice
+/// Same as `unalias_maybe` but const slice
 pub inline fn unalias_const_maybe(this: Val) ?[]const u8 {
     return this.unalias_maybe();
+}
+
+/// Same as `unalias_maybe` except asserts non-null
+pub inline fn unalias(this: Val) []u8 {
+    return this.unalias_maybe().?;
+}
+
+/// Same as `unalias` but const slice
+pub inline fn unalias_const(this: Val) []const u8 {
+    return this.unalias();
 }
