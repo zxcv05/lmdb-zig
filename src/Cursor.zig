@@ -33,7 +33,7 @@ pub fn get(this: Cursor, op: GetOp, key: ?[]const u8, data: ?[]const u8) ?Kv {
     if (!found) return null;
 
     return .{
-        c_key.unalias(),
+        c_key.unalias_maybe() orelse &.{},
         c_data.unalias_maybe() orelse &.{},
     };
 }
@@ -230,7 +230,7 @@ pub const GetIterator = struct {
         }
 
         return .{
-            this.c_key.unalias(),
+            this.c_key.unalias_maybe() orelse &.{},
             this.c_data.unalias_maybe() orelse &.{},
         };
     }

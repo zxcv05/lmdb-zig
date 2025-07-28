@@ -86,6 +86,9 @@ test "cursor put + get" {
     const env, const dbi = try create_env("cursor-put-get", .{});
     defer env.deinit();
 
+    var datas: [4][16]u8 = undefined;
+    for (&datas) |*data| rng.fill(data);
+
     {
         var txn = try env.begin(.read_write, .{});
         defer txn.abort();
@@ -93,19 +96,9 @@ test "cursor put + get" {
         const cursor = txn.cursor(dbi);
         defer cursor.deinit();
 
-        for (0..4) |i| {
-            var data: [16]u8 = undefined;
-            rng.fill(&data);
-
+        for (&datas, 0..) |*data, i| {
             const key: u8 = @intCast(i);
-            try cursor.put(std.mem.asBytes(&key), &data, .{});
-
-            std.debug.print("\t{d}b:{s} = {d}b:{s}\n", .{
-                1,
-                std.fmt.bytesToHex(std.mem.asBytes(&key), .upper),
-                data.len,
-                std.fmt.bytesToHex(data, .upper),
-            });
+            try cursor.put(std.mem.asBytes(&key), data, .{});
         }
 
         try txn.commit();
@@ -117,21 +110,72 @@ test "cursor put + get" {
     const cursor = txn.cursor(dbi);
     defer cursor.deinit();
 
-    var iter = cursor.get_iter(.set, &.{0}, null, .next);
+    var iter = cursor.get_iter(.first, null, null, .next);
 
-    while (iter.next()) |kv| {
-        const k, const v = kv;
+    for (&datas, 0..) |*data, i| {
+        const k, const v = iter.next().?;
 
-        const kb: [1]u8 = k[0..1].*;
-        const vb: [16]u8 = v[0..16].*;
-
-        std.debug.print("\t{d}b:{s} = {d}b:{s}\n", .{
-            k.len,
-            std.fmt.bytesToHex(kb, .upper),
-            v.len,
-            std.fmt.bytesToHex(vb, .upper),
-        });
+        try std.testing.expectEqual(i, std.mem.bytesToValue(u8, k));
+        try std.testing.expectEqualSlices(u8, data, v);
     }
+
+    try std.testing.expect(iter.next() == null);
+}
+
+test "dupsort cursor put + get" {
+    var rng: std.Random.Xoroshiro128 = .init(std.testing.random_seed);
+
+    const env, const dbi = try create_env("dupsort-cursor-put-get", .{ .dup_sort = true });
+    defer env.deinit();
+
+    var datas: [2][2][16]u8 = undefined;
+    for (&datas) |*lv1| for (lv1) |*lv2| rng.fill(lv2);
+
+    {
+        var txn = try env.begin(.read_write, .{});
+        defer txn.abort();
+
+        const cursor = txn.cursor(dbi);
+        defer cursor.deinit();
+
+        for (&datas, 0..) |*lv1, i| for (lv1) |*lv2| {
+            const key: u8 = @intCast(i);
+            try cursor.put(std.mem.asBytes(&key), lv2, .{});
+        };
+
+        try txn.commit();
+    }
+
+    var txn = try env.begin(.read_only, .{});
+    defer txn.abort();
+
+    const cursor = txn.cursor(dbi);
+    defer cursor.deinit();
+
+    const init_k, _ = cursor.get(.first, null, null) orelse unreachable;
+    var iter = cursor.get_iter(.first_dup, init_k, null, .next);
+
+    for (&datas, 0..) |*lv1, i| for (0..lv1.len) |_| {
+        const k, const v = iter.next().?;
+
+        // const kb: [1]u8 = k[0..1].*;
+        // const vb: [16]u8 = v[0..16].*;
+        // std.debug.print("{s} = {d}b:{s}\n", .{
+        //     std.fmt.bytesToHex(kb, .upper),
+        //     v.len,
+        //     std.fmt.bytesToHex(vb, .upper),
+        // });
+
+        try std.testing.expectEqual(i, std.mem.bytesToValue(u8, k));
+
+        const exists = for (lv1) |*lv2| {
+            if (std.mem.eql(u8, v, lv2)) break true;
+        } else false;
+
+        try std.testing.expect(exists);
+    };
+
+    try std.testing.expect(iter.next() == null);
 }
 
 test "put_or_get + del" {
@@ -173,7 +217,7 @@ test "put_or_get + del" {
     const cursor = txn.cursor(dbi);
     defer cursor.deinit();
 
-    var iter = cursor.get_iter(.set, "key1", null, .next);
+    var iter = cursor.get_iter(.first, null, null, .next);
 
     const k1, const v1 = iter.next().?;
     try std.testing.expectEqualStrings("key1", k1);

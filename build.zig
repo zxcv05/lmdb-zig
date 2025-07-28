@@ -4,6 +4,8 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const tests_use_system_lib = b.option(bool, "tests-use-system-lib", "Use globally installed 'lmdb' library for unit tests") orelse false;
+
     const no_run = b.option(bool, "no-run", "Don't run anything") orelse false;
     const no_install = b.option(bool, "no-install", "Don't install anything") orelse false;
     const test_filter = b.option([]const u8, "test-filter", "Filter tests") orelse "";
@@ -30,6 +32,8 @@ pub fn build(b: *std.Build) !void {
         b.default_step.dependOn(&lmdb_lib_install.step);
     }
 
+    // unit tests
+
     var filter_iter = std.mem.splitScalar(u8, test_filter, ';');
     var filters = try std.ArrayList([]const u8).initCapacity(b.allocator, 16);
 
@@ -42,7 +46,12 @@ pub fn build(b: *std.Build) !void {
         .filters = filters.items,
         .use_llvm = false,
     });
-    unit_tests.linkLibrary(lmdb_lib);
+
+    if (tests_use_system_lib) {
+        unit_tests.linkSystemLibrary("lmdb");
+    } else {
+        unit_tests.linkLibrary(lmdb_lib);
+    }
 
     const test_step = b.step("test", "Run unit tests");
     if (no_run) {
@@ -58,6 +67,7 @@ fn makeLmdbLib(b: *std.Build, upstream: *std.Build.Dependency, target: std.Build
     const lib = b.addLibrary(.{
         .name = "lmdb",
         .linkage = .static,
+        .use_llvm = true,
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
