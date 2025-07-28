@@ -19,8 +19,6 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/root.zig"),
         .imports = &.{.{ .name = "c", .module = lmdb_c }},
 
-        .red_zone = true,
-
         .target = target,
         .optimize = optimize,
     });
