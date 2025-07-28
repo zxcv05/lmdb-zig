@@ -8,17 +8,14 @@ const Val = @This();
 data: c.MDB_val,
 
 /// Intended to be overwritten by a c function call
-pub const empty: Val = .{ .data = undefined };
+pub const empty: Val = .{ .data = std.mem.zeroes(c.MDB_val) };
 
 /// Create a MDB_val from a zig slice
 pub inline fn from(maybe_slice: ?[]u8) Val {
     return if (maybe_slice) |slice| .{ .data = .{
         .mv_size = @intCast(slice.len),
         .mv_data = @ptrCast(slice.ptr),
-    } } else .{ .data = .{
-        .mv_size = 0,
-        .mv_data = @ptrFromInt(0),
-    } };
+    } } else .empty;
 }
 
 /// Same as `from` but with a const slice
@@ -49,17 +46,7 @@ pub inline fn unalias_maybe(this: Val) ?[]u8 {
     return ptr[0..this.data.mv_size];
 }
 
-/// Same as `unalias_maybe` but const slice
-pub inline fn unalias_const_maybe(this: Val) ?[]const u8 {
-    return this.unalias_maybe();
-}
-
 /// Same as `unalias_maybe` except asserts non-null
 pub inline fn unalias(this: Val) []u8 {
     return this.unalias_maybe().?;
-}
-
-/// Same as `unalias` but const slice
-pub inline fn unalias_const(this: Val) []const u8 {
-    return this.unalias();
 }

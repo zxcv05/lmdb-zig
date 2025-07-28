@@ -23,15 +23,15 @@ pub fn init(path: [:0]const u8, options: InitOptions) !Env {
     // setup environment
 
     if (options.max_readers) |max_readers| {
-        if (c.mdb_env_set_maxreaders(env, @intCast(max_readers)) != 0) unreachable;
+        if (c.mdb_env_set_maxreaders(env, @intCast(max_readers)) != @intFromEnum(root.E.SUCCESS)) unreachable;
     }
 
     if (options.map_size) |map_size| {
-        if (c.mdb_env_set_mapsize(env, @intCast(map_size)) != 0) unreachable;
+        if (c.mdb_env_set_mapsize(env, @intCast(map_size)) != @intFromEnum(root.E.SUCCESS)) unreachable;
     }
 
     if (options.max_dbs) |max_dbs| {
-        if (c.mdb_env_set_maxdbs(env, @intCast(max_dbs)) != 0) unreachable;
+        if (c.mdb_env_set_maxdbs(env, @intCast(max_dbs)) != @intFromEnum(root.E.SUCCESS)) unreachable;
     }
 
     // open db

@@ -51,7 +51,7 @@ pub const all_flags = struct {
     pub const no_lock       = c.MDB_NOLOCK;
     pub const no_read_ahead = c.MDB_NORDAHEAD;
     pub const no_mem_init   = c.MDB_NOMEMINIT;
-    pub const previous_snapshot  = c.MDB_PREVSNAPSHOT;
+    pub const previous_snapshot = c.MDB_PREVSNAPSHOT;
     // db flags
     pub const reverse_key   = c.MDB_REVERSEKEY;
     pub const dup_sort      = c.MDB_DUPSORT;
@@ -81,6 +81,10 @@ test {
         @intFromEnum(std.posix.E.SUCCESS),
         @intFromEnum(E.SUCCESS),
     );
+
+    std.fs.cwd().makeDir("testdb") catch {};
+    std.fs.cwd().deleteFile("testdb/data.mdb") catch {};
+    std.fs.cwd().deleteFile("testdb/lock.mdb") catch {};
 
     std.testing.refAllDeclsRecursive(@This());
     std.testing.refAllDecls(@import("behavior_tests.zig"));

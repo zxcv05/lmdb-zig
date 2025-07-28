@@ -23,7 +23,7 @@ pub fn init(txn: Txn, name: ?[:0]const u8, flags: InitFlags) !Dbi {
     var dbi: c.MDB_dbi = undefined;
 
     switch (root.errno(
-        c.mdb_dbi_open(txn.inner, if (name) |n| n.ptr else null, 0, &dbi),
+        c.mdb_dbi_open(txn.inner, if (name) |n| n.ptr else null, flags_int, &dbi),
     )) {
         .SUCCESS => return .{ .handle = dbi },
         .NOTFOUND => return error.NotFound,
@@ -32,7 +32,7 @@ pub fn init(txn: Txn, name: ?[:0]const u8, flags: InitFlags) !Dbi {
     }
 }
 
-pub fn statistics(this: Dbi, txn: Txn) c.MDB_stat {
+pub fn get_stats(this: Dbi, txn: Txn) c.MDB_stat {
     var stat: c.MDB_stat = undefined;
     if (c.mdb_stat(txn.inner, this.handle, &stat) != @intFromEnum(root.E.SUCCESS)) unreachable;
     return stat;
@@ -65,7 +65,7 @@ pub fn put(this: Dbi, txn: Txn, key: []const u8, data: []const u8, flags: PutFla
             flags_int |= @field(root.all_flags, field.name);
     }
 
-    try this.put_impl(txn, &c_key, &c_data, flags_int);
+    return this.put_impl(txn, c_key.alias(), c_data.alias(), flags_int);
 }
 
 /// Always specifies no_overwrite
@@ -79,17 +79,21 @@ pub fn put_get(this: Dbi, txn: Txn, key: []const u8, data: []const u8, flags: Pu
             flags_int |= @field(root.all_flags, field.name);
     }
 
-    try this.put_impl(txn, &c_key, &c_data, flags_int);
+    this.put_impl(txn, c_key.alias(), c_data.alias(), flags_int) catch |e| switch (e) {
+        error.AlreadyExists => {},
+        else => return e,
+    };
     return c_data.unalias();
 }
 
-fn put_impl(this: Dbi, txn: Txn, key: *Val, data: *Val, flags: c_uint) !void {
+fn put_impl(this: Dbi, txn: Txn, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags: c_uint) !void {
     switch (root.errno(
-        c.mdb_put(txn.inner, this.handle, key.alias(), data.alias(), flags),
+        c.mdb_put(txn.inner, this.handle, c_key, c_data, flags),
     )) {
         .SUCCESS => {},
-        .MAP_FULL => return error.DbFull,
+        .MAP_FULL => return error.MapFull,
         .TXN_FULL => return error.TxnFull,
+        .KEYEXIST => return error.AlreadyExists,
         else => |rc| switch (std.posix.errno(@intFromEnum(rc))) {
             .ACCES => return error.ReadOnly,
             .INVAL => return error.Invalid,
@@ -98,12 +102,13 @@ fn put_impl(this: Dbi, txn: Txn, key: *Val, data: *Val, flags: c_uint) !void {
     }
 }
 
+/// note: "NOTFOUND" is not considered an error condition
 pub fn del(this: Dbi, txn: Txn, key: []const u8, data: ?[]const u8) !void {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
     switch (root.errno(c.mdb_del(txn.inner, this.handle, c_key.alias(), c_data.alias()))) {
-        .SUCCESS => {},
+        .NOTFOUND, .SUCCESS => {},
         else => |rc| switch (std.posix.errno(@intFromEnum(rc))) {
             .ACCES => return error.ReadOnly,
             .INVAL => return error.Invalid,
@@ -152,7 +157,7 @@ pub const InitFlags = packed struct {
 
 pub const PutFlags = packed struct {
     no_dup_data: bool = false,
-    reserve: bool = false,
+    // reserve: bool = false,
     append: bool = false,
     append_dup: bool = false,
 };

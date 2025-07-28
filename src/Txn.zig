@@ -4,6 +4,8 @@ const root = @import("root.zig");
 const std = @import("std");
 const c = @import("c");
 
+const Cursor = @import("Cursor.zig");
+const Dbi = @import("Dbi.zig");
 const Env = @import("Env.zig");
 
 // todo: track state to catch lmdb bugs/limitations at runtime
@@ -77,6 +79,10 @@ pub fn reset_renew(this: *Txn) !void {
         .SUCCESS => this.done = false,
         else => return error.RenewFailed,
     }
+}
+
+pub fn cursor(this: Txn, dbi: Dbi) Cursor {
+    return dbi.cursor(this);
 }
 
 pub const Access = enum {
