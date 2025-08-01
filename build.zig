@@ -65,11 +65,13 @@ fn makeLmdbLib(b: *std.Build, upstream: *std.Build.Dependency, target: std.Build
     const lib = b.addLibrary(.{
         .name = "lmdb",
         .linkage = .static,
-        .use_llvm = true,
+
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
+
             .link_libc = true,
+            .sanitize_c = .off,
         }),
     });
 

@@ -3,9 +3,6 @@
 ## Goals
 - Functional wrappers providing for every use case covered by lmdb
 
-## Bugs
-- Our `lmdb` lib has a nasty bug for `dup_sort` databases which results in a panic for some operations. Workaround: use system installed version of the library with `artifact.linkSystemLibrary("lmdb")` until fixed
-
 ## build.zig
 - zig wrappers available as module `lmdb`
 - translated `liblmdb` headers available as module `c`
