@@ -32,8 +32,8 @@ pub inline fn of_size(size: usize) Val {
 }
 
 /// return a pointer compatible with [*c]c.MDB_val
-pub inline fn alias(this: *const Val) ?*c.MDB_val {
-    return @constCast(&this.data);
+pub inline fn alias(this: *Val) ?*c.MDB_val {
+    return &this.data;
 }
 
 //
