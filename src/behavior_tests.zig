@@ -270,7 +270,8 @@ test "put_append" {
         defer cursor.deinit();
 
         for (&data, 0..) |*lv1, i| {
-            try cursor.put_append_dup(std.mem.asBytes(&i), lv1);
+            const key: u8 = @intCast(i);
+            try cursor.put_append_dup(std.mem.asBytes(&key), lv1);
         }
 
         try txn.commit();
@@ -285,8 +286,10 @@ test "put_append" {
     var iter = cursor.get_iter(.first, null, null, .next_dup);
     var i: usize = 0;
     while (iter.next()) |kv| : (i += 1) {
+        const key: u8 = @intCast(i);
+
         const k, const v = kv;
-        try std.testing.expectEqualSlices(u8, std.mem.asBytes(&i), k);
+        try std.testing.expectEqualSlices(u8, std.mem.asBytes(&key), k);
         try std.testing.expectEqualSlices(u8, &data[i], v);
     }
 
