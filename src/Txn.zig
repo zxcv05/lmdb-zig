@@ -39,7 +39,7 @@ pub fn init(env: Env, parent: ?*const Txn, access: Access, flags: InitFlags) !Tx
         .PANIC => return error.Panic,
         .MAP_RESIZED => return error.MapResized,
         .READERS_FULL => return error.ReadersFull,
-        else => |rc| switch (std.posix.errno(@intFromEnum(rc))) {
+        else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
             .NOMEM => return error.OutOfMemory,
             else => unreachable,
         },
@@ -51,9 +51,9 @@ pub fn commit(this: *Txn) !void {
     if (this.done) return;
     this.done = true;
 
-    switch (std.posix.errno(
+    switch (@as(std.posix.E, @enumFromInt(
         c.mdb_txn_commit(this.inner),
-    )) {
+    ))) {
         .SUCCESS => {},
         .INVAL => return error.Invalid,
         .NOSPC => return error.NoSpaceLeft,
@@ -81,8 +81,8 @@ pub fn reset_renew(this: *Txn) !void {
     }
 }
 
-pub fn cursor(this: Txn, dbi: Dbi) Cursor {
-    return dbi.cursor(this);
+pub inline fn cursor(txn: Txn, dbi: Dbi) Cursor {
+    return dbi.cursor(txn);
 }
 
 pub const Access = enum {

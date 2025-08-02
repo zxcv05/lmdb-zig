@@ -1,17 +1,23 @@
 const std = @import("std");
 
+const EXAMPLES = [_][]const u8{
+    "dump-db",
+};
+
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const tests_use_system_lib = b.option(bool, "tests-use-system-lib", "Use globally installed 'lmdb' library for unit tests") orelse false;
-
     const no_run = b.option(bool, "no-run", "Don't run anything") orelse false;
     const no_install = b.option(bool, "no-install", "Don't install anything") orelse false;
+
     const test_filter = b.option([]const u8, "test-filter", "Filter tests") orelse "";
+    const tests_use_system_lib = b.option(bool, "tests-use-system-lib", "Use globally installed 'lmdb' library for unit tests") orelse false;
+
+    const use_tracing = b.option(bool, "use-tracing", "Enable debug tracing logs") orelse false;
 
     const upstream_dep = b.dependency("upstream", .{});
-    const lmdb_lib = makeLmdbLib(b, upstream_dep, target, optimize);
+    const lmdb_lib = makeLmdbLib(b, upstream_dep, target, optimize, use_tracing);
     const lmdb_c = makeLmdbC(b, upstream_dep, target, optimize);
 
     // zig wrappers live here
@@ -58,10 +64,39 @@ pub fn build(b: *std.Build) !void {
         const unit_tests_run = b.addRunArtifact(unit_tests);
         test_step.dependOn(&unit_tests_run.step);
     }
+
+    // examples
+
+    inline for (EXAMPLES) |name| {
+        const module = b.createModule(.{
+            .root_source_file = b.path("examples/" ++ name ++ ".zig"),
+            .imports = &.{.{ .name = "lmdb", .module = root_mod }},
+
+            .optimize = optimize,
+            .target = target,
+        });
+
+        const exe = b.addExecutable(.{
+            .name = name,
+            .root_module = module,
+        });
+
+        const exe_run = b.addRunArtifact(exe);
+        if (b.args) |args| exe_run.addArgs(args);
+
+        const exe_run_step = b.step("example-" ++ name, "Run example '" ++ name ++ "'");
+        exe_run_step.dependOn(&exe_run.step);
+    }
 }
 
 /// create static library from lmdb source (derived from the Makefile), available under artifact named `lmdb`
-fn makeLmdbLib(b: *std.Build, upstream: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Step.Compile {
+fn makeLmdbLib(
+    b: *std.Build,
+    upstream: *std.Build.Dependency,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    use_tracing: bool,
+) *std.Build.Step.Compile {
     const lib = b.addLibrary(.{
         .name = "lmdb",
         .linkage = .static,
@@ -80,10 +115,11 @@ fn makeLmdbLib(b: *std.Build, upstream: *std.Build.Dependency, target: std.Build
         .root = upstream.path("libraries/liblmdb/"),
         .files = &.{ "mdb.c", "midl.c" },
         .flags = &.{
-            switch (optimize) {
-                .Debug => "-DMDB_DEBUG=1",
+            if (use_tracing)
+                "-DMDB_DEBUG=1"
+            else switch (optimize) {
                 .ReleaseFast, .ReleaseSmall => "-DNDEBUG",
-                .ReleaseSafe => "",
+                else => "",
             },
             "-W",
             "-Wall",
@@ -97,7 +133,12 @@ fn makeLmdbLib(b: *std.Build, upstream: *std.Build.Dependency, target: std.Build
 }
 
 /// create translate step for lmdb headers, available under module named `c`
-fn makeLmdbC(b: *std.Build, upstream: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+fn makeLmdbC(
+    b: *std.Build,
+    upstream: *std.Build.Dependency,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Module {
     const translate = b.addTranslateC(.{
         .root_source_file = upstream.path("libraries/liblmdb/lmdb.h"),
         .use_clang = true,

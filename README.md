@@ -3,6 +3,9 @@
 ## Goals
 - Functional wrappers providing for every use case covered by lmdb
 
+## Examples
+see `/examples/`
+
 ## build.zig
 - zig wrappers available as module `lmdb`
 - translated `liblmdb` headers available as module `c`

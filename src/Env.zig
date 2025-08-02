@@ -4,6 +4,7 @@ const root = @import("root.zig");
 const std = @import("std");
 const c = @import("c");
 
+const Dbi = @import("Dbi.zig");
 const Txn = @import("Txn.zig");
 
 const Env = @This();
@@ -51,11 +52,15 @@ pub fn init(path: [:0]const u8, options: InitOptions) !Env {
         .SUCCESS => {},
         .INVALID => return error.CorruptedHeaders,
         .VERSION_MISMATCH => return error.VersionMismatch,
-        else => |rc| switch (std.posix.errno(@intFromEnum(rc))) {
+        else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+            .NOTDIR => return error.NotADirectory,
             .NOENT => return error.PathDoesntExist,
             .ACCES => return error.PermissionDenied,
             .AGAIN => return error.EnvironmentLocked,
-            else => unreachable,
+            else => |rc2| {
+                std.debug.print("{any} {any} {d}", .{ rc, rc2, @intFromEnum(rc) });
+                unreachable;
+            },
         },
     }
 
@@ -69,15 +74,21 @@ pub fn deinit(this: Env) void {
 
 /// flush env to disk
 pub fn sync(this: Env, force: bool) !void {
-    switch (std.posix.errno(
+    switch (@as(std.posix.E, @enumFromInt(
         c.mdb_env_sync(this.inner, @intFromBool(force)),
-    )) {
+    ))) {
         .SUCCESS => {},
         .ACCES => return error.ReadOnly,
         .INVAL => return error.Invalid,
         .IO => return error.IoError,
         else => unreachable,
     }
+}
+
+/// Open a database
+pub fn open(this: Env, txn: Txn, name: ?[:0]const u8, flags: Dbi.InitFlags) !Dbi {
+    _ = this;
+    return Dbi.init(txn, name, flags);
 }
 
 /// Create a transaction

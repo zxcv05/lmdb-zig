@@ -4,6 +4,7 @@ const root = @import("root.zig");
 const std = @import("std");
 const c = @import("c");
 
+const Dbi = @import("Dbi.zig");
 const Txn = @import("Txn.zig");
 const Val = @import("Val.zig");
 
@@ -14,7 +15,7 @@ const Cursor = @This();
 
 inner: *c.MDB_cursor,
 
-// init: see `Dbi.cursor(...)`
+pub const init = Dbi.cursor;
 
 /// Transaction must outlive this call if writes occurred
 pub fn deinit(this: Cursor) void {
@@ -25,6 +26,8 @@ pub fn renew(this: Cursor, txn: Txn) void {
     if (c.mdb_cursor_renew(txn.inner, this.inner) != @intFromEnum(root.E.SUCCESS)) unreachable;
 }
 
+/// Warning: Errors will be treated as "Not found" and will return null
+/// Make sure if doing DUPSORT operations that the dbi is actually DUPSORT
 pub fn get(this: Cursor, op: GetOp, key: ?[]const u8, data: ?[]const u8) ?Kv {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
@@ -38,18 +41,18 @@ pub fn get(this: Cursor, op: GetOp, key: ?[]const u8, data: ?[]const u8) ?Kv {
     };
 }
 
-/// returns if data was found
+/// returns true if data found, false if not found or error occured
 fn get_impl(this: Cursor, op: GetOp, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val) bool {
     switch (root.errno(
         c.mdb_cursor_get(this.inner, c_key, c_data, @intFromEnum(op)),
     )) {
         .NOTFOUND => return false,
-        else => |rc| if (@intFromEnum(rc) >= @intFromEnum(root.E.SUCCESS))
-            return true
-        else {
-            std.debug.print("get_impl: {any}\n", .{rc});
-            unreachable;
-        },
+        else => |rc| return @intFromEnum(rc) >= @intFromEnum(root.E.SUCCESS),
+        //     return true
+        // else {
+        //     std.debug.print("get_impl: {any}\n", .{rc});
+        //     unreachable;
+        // },
     }
 }
 
@@ -63,60 +66,80 @@ pub fn get_iter(
     return GetIterator.init(this, init_op, init_key, init_data, loop_op);
 }
 
-pub fn put(this: Cursor, key: []const u8, data: []const u8, flags: PutFlags) !void {
+pub fn put(this: Cursor, key: []const u8, data: []const u8) !void {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
-    var flags_int: c_uint = 0;
-    inline for (std.meta.fields(PutFlags)) |flag| {
-        if (@field(flags, flag.name))
-            flags_int |= @field(root.all_flags, flag.name);
-    }
-
-    return this.put_impl(c_key.alias(), c_data.alias(), flags_int);
+    return this.put_impl(c_key.alias(), c_data.alias(), 0);
 }
 
-/// Always specifies no_overwrite
-pub fn put_get(this: Cursor, key: []const u8, data: []const u8, flags: PutFlags) ![]u8 {
+/// `put()` with `current` flag
+/// key must match item at the current cursor position
+pub fn put_replace(this: Cursor, key: []const u8, data: []const u8) !void {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
-    var flags_int: c_uint = root.all_flags.no_overwrite;
-    inline for (std.meta.fields(PutFlags)) |field| {
-        if (@field(flags, field.name))
-            flags_int |= @field(root.all_flags, field.name);
-    }
+    return this.put_impl(c_key.alias(), c_data.alias(), root.all_flags.current);
+}
 
-    this.put_impl(c_key.alias(), c_data.alias(), flags_int) catch |e| switch (e) {
+/// `put()` with `no_dup_data` flag
+/// supported for DUPSORT databases
+pub fn put_no_clobber(this: Cursor, key: []const u8, data: []const u8) !void {
+    var c_key: Val = .from_const(key);
+    var c_data: Val = .from_const(data);
+
+    return this.put_impl(c_key.alias(), c_data.alias(), root.all_flags.no_dup_data);
+}
+
+/// `put()` with `no_overwrite` flag
+/// will put data (if not existing) or return it (if existing)
+pub fn put_get(this: Cursor, key: []const u8, data: []const u8) ![]u8 {
+    var c_key: Val = .from_const(key);
+    var c_data: Val = .from_const(data);
+
+    this.put_impl(c_key.alias(), c_data.alias(), root.all_flags.no_overwrite) catch |e| switch (e) {
         error.AlreadyExists => {},
         else => return e,
     };
     return c_data.unalias();
 }
 
-// TODO: make this function work and rewrite a unit test
-// pub fn put_multiple(this: Cursor, comptime T: type, key: []const u8, data: []const T, flags: PutFlags) !usize {
+/// `put()` with `append` flag
+/// must be sorted
+pub fn put_append(this: Cursor, key: []const u8, data: []const u8) !void {
+    var c_key: Val = .from_const(key);
+    var c_data: Val = .from_const(data);
+
+    return this.put_impl(c_key.alias(), c_data.alias(), root.all_flags.append) catch |e| switch (e) {
+        error.AlreadyExists => error.Unsorted,
+        else => e,
+    };
+}
+
+/// `put()` with `append_dup` flag
+/// supported for DUPSORT databases
+pub fn put_append_dup(this: Cursor, key: []const u8, data: []const u8) !void {
+    var c_key: Val = .from_const(key);
+    var c_data: Val = .from_const(data);
+
+    return this.put_impl(c_key.alias(), c_data.alias(), root.all_flags.append_dup) catch |e| switch (e) {
+        error.AlreadyExists => error.Unsorted,
+        else => e,
+    };
+}
+
+/// `put()` with `multiple` flag
+/// supported for DUPFIXED databases
+// pub fn put_multiple(this: Cursor, comptime T: type, key: []const u8, data: []const T) !usize {
 //     var data_actual: [2]c.MDB_val = .{
 //         .{ .mv_size = @sizeOf(T), .mv_data = @ptrCast(@constCast(data.ptr)) },
 //         .{ .mv_size = data.len, .mv_data = undefined },
 //     };
 
-//     std.debug.print("{any}\n", .{data_actual});
-
 //     var c_key: Val = .from_const(key);
 //     var c_data: Val = .from(std.mem.asBytes(&data_actual));
 
-//     var flags_int: c_uint = root.all_flags.multiple;
-//     inline for (std.meta.fields(PutFlags)) |flag| {
-//         if (@field(flags, flag.name))
-//             flags_int |= @field(root.all_flags, flag.name);
-//     }
-
-//     this.put_impl(c_key.alias(), c_data.alias(), flags_int) catch |e| switch (e) {
-//         error.AlreadyExists => if (flags.append or flags.append_dup) return error.Unsorted else unreachable,
-//         else => return e,
-//     };
-
+//     try this.put_impl(c_key.alias(), c_data.alias(), root.all_flags.multiple);
 //     return data_actual[1].mv_size;
 // }
 
@@ -128,7 +151,7 @@ fn put_impl(this: Cursor, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags: c_uint
         .MAP_FULL => return error.MapFull,
         .TXN_FULL => return error.TxnFull,
         .KEYEXIST => return error.AlreadyExists,
-        else => |rc| switch (std.posix.errno(@intFromEnum(rc))) {
+        else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
             .ACCES => return error.ReadOnly,
             .INVAL => return error.Invalid,
             else => unreachable,
@@ -136,21 +159,26 @@ fn put_impl(this: Cursor, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags: c_uint
     }
 }
 
-pub fn del(this: Cursor, flags: DelFlags) !void {
-    var flags_int: c_uint = 0;
-    inline for (std.meta.fields(DelFlags)) |flag| {
-        if (@field(flags, flag.name))
-            flags_int |= @field(root.all_flags, flag.name);
-    }
+/// Delete current key/data pair
+pub fn del(this: Cursor) !void {
+    return this.del_impl(0);
+}
 
-    switch (std.posix.errno(
-        c.mdb_cursor_del(this.inner, flags_int),
-    )) {
+/// Delete all items for current key
+/// supported for DUPSORT databases
+pub fn del_all(this: Cursor) !void {
+    return this.del_impl(root.all_flags.no_dup_data);
+}
+
+fn del_impl(this: Cursor, flags: c_uint) !void {
+    return switch (@as(std.posix.E, @enumFromInt(
+        c.mdb_cursor_del(this.inner, flags),
+    ))) {
         .SUCCESS => {},
-        .ACCES => return error.ReadOnly,
-        .INVAL => return error.Invalid,
+        .ACCES => error.ReadOnly,
+        .INVAL => error.Invalid,
         else => unreachable,
-    }
+    };
 }
 
 pub const Kv = struct { []const u8, []const u8 };
@@ -175,16 +203,6 @@ pub const GetOp = enum(u5) {
     prev_dup = c.MDB_PREV_DUP,
     prev_nodup = c.MDB_PREV_NODUP,
     prev_multiple = c.MDB_PREV_MULTIPLE,
-};
-
-pub const PutFlags = packed struct {
-    current: bool = false,
-    no_dup_data: bool = false,
-    no_overwrite: bool = false,
-    // reserve: bool = false,
-    append: bool = false,
-    append_dup: bool = false,
-    // multiple,
 };
 
 pub const DelFlags = packed struct {

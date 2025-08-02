@@ -27,8 +27,13 @@ pub fn init(txn: Txn, name: ?[:0]const u8, flags: InitFlags) !Dbi {
     )) {
         .SUCCESS => return .{ .handle = dbi },
         .NOTFOUND => return error.NotFound,
-        .DBS_FULL => return error.TooMany,
-        else => unreachable,
+        .DBS_FULL => return error.TooMany, // maxdbs reached
+        .BAD_VALSIZE => return error.BadValsize, // unsupported size of key/db name/data, or wrong DUPFIXED size
+        .INCOMPATIBLE => return error.Incompatible, // database was dropped and opened with different flags
+        else => |rc| {
+            std.debug.print("Dbi.init: {any}\n", .{rc});
+            unreachable;
+        },
     }
 }
 
@@ -55,51 +60,72 @@ pub fn get_const(this: Dbi, txn: Txn, key: []const u8) ?[]const u8 {
     return this.get(txn, key);
 }
 
-pub fn put(this: Dbi, txn: Txn, key: []const u8, data: []const u8, flags: PutFlags) !void {
+pub fn put(this: Dbi, txn: Txn, key: []const u8, data: []const u8) !void {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
-    var flags_int: c_uint = 0;
-    inline for (std.meta.fields(PutFlags)) |field| {
-        if (@field(flags, field.name))
-            flags_int |= @field(root.all_flags, field.name);
-    }
-
-    return this.put_impl(txn, c_key.alias(), c_data.alias(), flags_int);
+    return this.put_impl(txn, c_key.alias(), c_data.alias(), 0);
 }
 
-/// Always specifies no_overwrite
-pub fn put_get(this: Dbi, txn: Txn, key: []const u8, data: []const u8, flags: PutFlags) ![]u8 {
+/// `put()` with `no_dup_data` flag
+/// supported for DUPSORT databases
+pub fn put_no_clobber(this: Dbi, txn: Txn, key: []const u8, data: []const u8) !void {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
-    var flags_int: c_uint = root.all_flags.no_overwrite;
-    inline for (std.meta.fields(PutFlags)) |field| {
-        if (@field(flags, field.name))
-            flags_int |= @field(root.all_flags, field.name);
-    }
+    return this.put_impl(txn, c_key.alias(), c_data.alias(), root.all_flags.no_dup_data);
+}
 
-    this.put_impl(txn, c_key.alias(), c_data.alias(), flags_int) catch |e| switch (e) {
+/// `put()` with `no_overwrite` flag
+pub fn put_get(this: Dbi, txn: Txn, key: []const u8, data: []const u8) ![]u8 {
+    var c_key: Val = .from_const(key);
+    var c_data: Val = .from_const(data);
+
+    this.put_impl(txn, c_key.alias(), c_data.alias(), root.all_flags.no_overwrite) catch |e| switch (e) {
         error.AlreadyExists => {},
         else => return e,
     };
     return c_data.unalias();
 }
 
+/// `put()` with `append` flag
+/// must be sorted
+pub fn put_append(this: Dbi, txn: Txn, key: []const u8, data: []const u8) !void {
+    var c_key: Val = .from_const(key);
+    var c_data: Val = .from_const(data);
+
+    return this.put_impl(txn, c_key.alias(), c_data.alias(), root.all_flags.append) catch |e| switch (e) {
+        error.AlreadyExists => error.Unsorted,
+        else => e,
+    };
+}
+
+/// `put()` with `append_dup` flag
+/// supported for DUPSORT databases
+pub fn put_append_dup(this: Dbi, txn: Txn, key: []const u8, data: []const u8) !void {
+    var c_key: Val = .from_const(key);
+    var c_data: Val = .from_const(data);
+
+    return this.put_impl(txn, c_key.alias(), c_data.alias(), root.all_flags.append_dup) catch |e| switch (e) {
+        error.AlreadyExists => error.Unsorted,
+        else => e,
+    };
+}
+
 fn put_impl(this: Dbi, txn: Txn, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags: c_uint) !void {
-    switch (root.errno(
+    return switch (root.errno(
         c.mdb_put(txn.inner, this.handle, c_key, c_data, flags),
     )) {
         .SUCCESS => {},
-        .MAP_FULL => return error.MapFull,
-        .TXN_FULL => return error.TxnFull,
-        .KEYEXIST => return error.AlreadyExists,
-        else => |rc| switch (std.posix.errno(@intFromEnum(rc))) {
-            .ACCES => return error.ReadOnly,
-            .INVAL => return error.Invalid,
+        .MAP_FULL => error.MapFull,
+        .TXN_FULL => error.TxnFull,
+        .KEYEXIST => error.AlreadyExists,
+        else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+            .ACCES => error.ReadOnly,
+            .INVAL => error.Invalid,
             else => unreachable,
         },
-    }
+    };
 }
 
 /// note: "NOTFOUND" is not considered an error condition
@@ -107,14 +133,14 @@ pub fn del(this: Dbi, txn: Txn, key: []const u8, data: ?[]const u8) !void {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
-    switch (root.errno(c.mdb_del(txn.inner, this.handle, c_key.alias(), c_data.alias()))) {
+    return switch (root.errno(c.mdb_del(txn.inner, this.handle, c_key.alias(), c_data.alias()))) {
         .NOTFOUND, .SUCCESS => {},
-        else => |rc| switch (std.posix.errno(@intFromEnum(rc))) {
-            .ACCES => return error.ReadOnly,
-            .INVAL => return error.Invalid,
+        else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+            .ACCES => error.ReadOnly,
+            .INVAL => error.Invalid,
             else => unreachable,
         },
-    }
+    };
 }
 
 pub fn cmp_keys(this: Dbi, txn: Txn, a: []const u8, b: []const u8) std.math.Order {
@@ -139,9 +165,9 @@ pub fn cmp_data(this: Dbi, txn: Txn, a: []const u8, b: []const u8) std.math.Orde
     return .eq;
 }
 
-pub fn cursor(this: Dbi, txn: Txn) Cursor {
+pub fn cursor(dbi: Dbi, txn: Txn) Cursor {
     var ptr: ?*c.MDB_cursor = undefined;
-    if (c.mdb_cursor_open(txn.inner, this.handle, &ptr) != @intFromEnum(root.E.SUCCESS)) unreachable;
+    if (c.mdb_cursor_open(txn.inner, dbi.handle, &ptr) != @intFromEnum(root.E.SUCCESS)) unreachable;
     return .{ .inner = ptr.? };
 }
 
@@ -153,11 +179,4 @@ pub const InitFlags = packed struct {
     integer_dup: bool = false,
     reverse_dup: bool = false,
     create: bool = false,
-};
-
-pub const PutFlags = packed struct {
-    no_dup_data: bool = false,
-    // reserve: bool = false,
-    append: bool = false,
-    append_dup: bool = false,
 };
