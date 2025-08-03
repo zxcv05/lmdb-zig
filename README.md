@@ -12,6 +12,7 @@ see `/examples/`
 - compiled `liblmdb` static library available as artifact `lmdb`
 - available options:
   - `-Dno-install`: For default step, build but don't install `liblmdb` (default: false)
+  - `-Duse-tracing`: Build `liblmdb` static library with debug tracing enabled
   - `-Dno-run`: For `test` step, build but don't run unit tests (default: false)
   - `-Dtest-filter='x'`: For `test` step, filter which tests are run based on `x`
   - `-Dtests-use-system-lib`: For `test` step, use system installed `liblmdb` library instead of the one we build (default: false)
