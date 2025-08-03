@@ -348,3 +348,44 @@ test "put_append_dup" {
     try std.testing.expect(iter.next() == null);
     try std.testing.expectEqual(data.len, i);
 }
+
+test "empty_contents" {
+    const env, const dbi = try create_env("empty-contents", .{ .dup_sort = true, .dup_fixed = true });
+    defer env.deinit();
+
+    {
+        var txn = try env.begin(.read_write, .{});
+        defer txn.abort();
+
+        const cursor = txn.cursor(dbi);
+        defer cursor.deinit();
+
+        try cursor.put("hello", "world");
+        try txn.commit();
+    }
+
+    {
+        var txn = try env.begin(.read_only, .{});
+        defer txn.abort();
+
+        try std.testing.expectEqualStrings(
+            "world",
+            dbi.get(txn, "hello").?,
+        );
+    }
+
+    {
+        var txn = try env.begin(.read_write, .{});
+        defer txn.abort();
+
+        try std.testing.expect(dbi.empty_contents(txn));
+        try txn.commit();
+    }
+
+    {
+        var txn = try env.begin(.read_only, .{});
+        defer txn.abort();
+
+        try std.testing.expect(dbi.get(txn, "hello") == null);
+    }
+}

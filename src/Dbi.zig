@@ -143,8 +143,9 @@ pub fn del(this: Dbi, txn: Txn, key: []const u8, data: ?[]const u8) !void {
     };
 }
 
+/// Deletes all data contained in database, doesnt free handle
 /// Returns true on success
-pub fn empty(this: Dbi, txn: Txn) bool {
+pub fn empty_contents(this: Dbi, txn: Txn) bool {
     return c.mdb_drop(txn.inner, this.handle, 0) == 0;
 }
 
@@ -160,14 +161,16 @@ pub fn empty(this: Dbi, txn: Txn) bool {
 /// Closing a database handle is not necessary, but lets mdb_dbi_open() reuse
 /// the handle value. Usually it's better to set a bigger mdb_env_set_maxdbs(),
 /// unless that value would be large.
-pub fn close(this: *Dbi, env: Env) void {
+pub fn free_handle(this: *Dbi, env: Env) void {
     c.mdb_dbi_close(env.inner, this.handle);
     this.* = undefined;
 }
 
-/// Please see `close()` for important documentation about how to use this function.
+/// Please see `free_handle()` for important documentation about how to use this function.
+///
+/// Deletes database from the environment and frees handle
 /// Returns true on success
-pub fn drop(this: *Dbi, txn: Txn) bool {
+pub fn delete_and_free(this: *Dbi, txn: Txn) bool {
     if (c.mdb_drop(txn.inner, this.handle, 1) == 0) {
         this.* = undefined;
         return true;

@@ -67,7 +67,7 @@ pub fn init(path: [:0]const u8, options: InitOptions) !Env {
     return .{ .inner = env };
 }
 
-/// All transactions, databases, and cursors must already be closed before this call
+/// All transactions and cursors must already be closed before this call
 pub fn deinit(this: Env) void {
     c.mdb_env_close(this.inner);
 }

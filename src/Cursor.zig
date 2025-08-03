@@ -9,7 +9,7 @@ const Txn = @import("Txn.zig");
 const Val = @import("Val.zig");
 
 // todo: track state to ensure correctness and provide debugging
-// - track is owned txn is rw/ro, only rw txn's free cursors, ro needs manual deinit()
+// - track if owned txn is rw/ro, only rw txn's free cursors, ro cursors need manual deinit()
 
 const Cursor = @This();
 
@@ -48,11 +48,6 @@ fn get_impl(this: Cursor, op: GetOp, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val) bo
     )) {
         .NOTFOUND => return false,
         else => |rc| return @intFromEnum(rc) >= @intFromEnum(root.E.SUCCESS),
-        //     return true
-        // else {
-        //     std.debug.print("get_impl: {any}\n", .{rc});
-        //     unreachable;
-        // },
     }
 }
 
