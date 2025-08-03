@@ -143,6 +143,39 @@ pub fn del(this: Dbi, txn: Txn, key: []const u8, data: ?[]const u8) !void {
     };
 }
 
+/// Returns true on success
+pub fn empty(this: Dbi, txn: Txn) bool {
+    return c.mdb_drop(txn.inner, this.handle, 0) == 0;
+}
+
+/// This is unnecessary! Use with care!
+///
+/// This call is not mutex protected. Handles should only be closed
+/// by a single thread, and only if no other threads are going to reference
+/// the database handle or one of its cursors any further. Do not close a
+/// handle if an existing transaction has modified its database. Doing so
+/// can cause misbehavior from database corruption to errors like
+/// MDB_BAD_VALSIZE (since the DB name is gone).
+///
+/// Closing a database handle is not necessary, but lets mdb_dbi_open() reuse
+/// the handle value. Usually it's better to set a bigger mdb_env_set_maxdbs(),
+/// unless that value would be large.
+pub fn close(this: *Dbi, env: Env) void {
+    c.mdb_dbi_close(env.inner, this.handle);
+    this.* = undefined;
+}
+
+/// Please see `close()` for important documentation about how to use this function.
+/// Returns true on success
+pub fn drop(this: *Dbi, txn: Txn) bool {
+    if (c.mdb_drop(txn.inner, this.handle, 1) == 0) {
+        this.* = undefined;
+        return true;
+    }
+
+    return false;
+}
+
 pub fn cmp_keys(this: Dbi, txn: Txn, a: []const u8, b: []const u8) std.math.Order {
     var c_a: Val = .from_const(a);
     var c_b: Val = .from_const(b);
