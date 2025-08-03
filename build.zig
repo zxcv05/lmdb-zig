@@ -106,7 +106,8 @@ fn makeLmdbLib(
             .optimize = optimize,
 
             .link_libc = true,
-            .sanitize_c = .off,
+            // 0.14.x uses a bool for this field
+            .sanitize_c = if (@hasDecl(std.zig, "SanitizeC")) .off else false,
         }),
     });
 
