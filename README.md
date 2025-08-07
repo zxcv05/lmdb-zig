@@ -6,9 +6,9 @@
 ## Examples
 see `/examples/`
 
-## "How do I use this?"
+### "How do I use this?"
 - First, fetch the package: `zig fetch --save=lmdb git+https://github.com/zxcv05/lmdb-zig`
-- Then, modify your build.zig:
+- Then, modify your `build.zig`:
 ```zig
 //! build.zig
 
@@ -35,6 +35,13 @@ pub fn my_func() !void {
     defer env.deinit();
     // ...
 }
+```
+
+### "Can I enable lmdb's tracing?"
+As long as you're not using the system-installed library, you can freely control when tracing is enabled
+- In your `build.zig`, all you need to change is the following line:
+```zig
+const lmdb_dep = b.dependency("lmdb", .{ .target = target, .optimize = optimize, .@"use-tracing" = true });
 ```
 
 ## build.zig
