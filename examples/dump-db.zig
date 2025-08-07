@@ -15,13 +15,12 @@ pub fn main() !void {
     const env: lmdb.Env = try .init(dbpath, .{ .max_dbs = 8 });
     defer env.deinit();
 
-    var txn = try env.begin(.read_write, .{});
+    var txn = try env.begin(@src(), .read_write, .{});
     defer txn.abort();
 
     const dbi = try env.open(txn, dbname, .{ .create = true, .dup_sort = true });
 
-    const cursor = dbi.cursor(txn);
-    defer cursor.deinit();
+    const cursor = try dbi.cursor(@src(), &txn);
 
     var key_iter = cursor.get_iter(.first, null, null, .next);
     var i: usize = 0;
