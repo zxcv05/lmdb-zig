@@ -4,21 +4,29 @@ const root = @import("root.zig");
 const std = @import("std");
 const c = @import("c");
 
+const utils = @import("utils.zig");
+
 const Cursor = @import("Cursor.zig");
 const Dbi = @import("Dbi.zig");
 const Env = @import("Env.zig");
 
-// todo: track state to catch lmdb bugs/limitations at runtime
-// - track transaction children, warn if deinit before all (children.done == true)
-// - track access to ensure calls to cursor operations or reset_renew() are valid
+// TODO: make Txn and Cursor generic with comptime known access mode, make BadAccess raise compile error
 
 const Txn = @This();
 
 inner: *c.MDB_txn,
 done: bool = false,
+debug: if (utils.DEBUG) Debug,
 
 /// Create new transaction - See `Env.begin*(...)`
-pub fn init(env: Env, parent: ?*const Txn, access: Access, flags: InitFlags) !Txn {
+/// Only one read_only txn per thread is allowed
+pub fn init(
+    env: Env,
+    src: std.builtin.SourceLocation,
+    parent: ?*Txn,
+    access: Access,
+    flags: InitFlags,
+) !Txn {
     if (parent) |ptxn| std.debug.assert(!ptxn.done);
 
     var flags_int: c_uint = 0;
@@ -35,22 +43,45 @@ pub fn init(env: Env, parent: ?*const Txn, access: Access, flags: InitFlags) !Tx
         flags_int,
         &maybe_txn,
     ))) {
-        .SUCCESS => return .{ .inner = maybe_txn.? },
+        .SUCCESS => {},
         .PANIC => return error.Panic,
+        .BAD_TXN => return error.BadParent,
         .MAP_RESIZED => return error.MapResized,
         .READERS_FULL => return error.ReadersFull,
         else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
             .NOMEM => return error.OutOfMemory,
+            .INVAL => return error.BlockedByReadOnlyTxn,
             else => unreachable,
         },
     }
+
+    if (utils.DEBUG) {
+        if (parent) |ptxn| ptxn.debug.children += 1;
+    }
+
+    return .{
+        .inner = maybe_txn.?,
+        .debug = if (utils.DEBUG) .{
+            .access = access,
+            .src = src,
+            .parent = parent,
+        },
+    };
 }
 
 /// Commit transaction's changes to db
 pub fn commit(this: *Txn) !void {
-    if (this.done) return;
-    this.done = true;
+    if (this.done) {
+        if (utils.DEBUG)
+            utils.printWithSrc(this.debug.src, "commit() called on {*} while already committed or aborted", .{this});
+        return error.Invalid;
+    }
 
+    if (utils.DEBUG) {
+        if (this.debug.parent) |ptxn| ptxn.debug.children -= 1;
+    }
+
+    defer this.done = true;
     switch (@as(std.posix.E, @enumFromInt(
         c.mdb_txn_commit(this.inner),
     ))) {
@@ -66,13 +97,27 @@ pub fn commit(this: *Txn) !void {
 /// Abandon all changes made by this transaction
 pub fn abort(this: *Txn) void {
     if (this.done) return;
-    this.done = true;
 
+    if (utils.DEBUG) {
+        if (this.debug.parent) |ptxn| ptxn.debug.children -= 1;
+    }
+
+    defer this.done = true;
     c.mdb_txn_abort(this.inner);
 }
 
-/// Reset then renew a read-only transaction (optimization)
+/// reset() then renew() a *read-only* transaction (optimization)
 pub fn reset_renew(this: *Txn) !void {
+    if (utils.DEBUG) {
+        if (this.debug.children > 0) {
+            utils.printWithSrc(this.debug.src, "reset_renew() called on {*} with {d} children", .{ this, this.debug.children });
+            return error.TxnHasChildren;
+        } else if (this.debug.access != .read_only) {
+            utils.printWithSrc(this.debug.src, "reset_renew() called on read_write {*}", .{this});
+            return error.BadAccess;
+        }
+    }
+
     c.mdb_txn_reset(this.inner);
 
     switch (root.errno(c.mdb_txn_renew(this.inner))) {
@@ -81,9 +126,16 @@ pub fn reset_renew(this: *Txn) !void {
     }
 }
 
-pub inline fn cursor(txn: Txn, dbi: Dbi) Cursor {
-    return dbi.cursor(txn);
+pub inline fn cursor(txn: *const Txn, src: std.builtin.SourceLocation, dbi: Dbi) !Cursor {
+    return Cursor.init(src, dbi, txn);
 }
+
+const Debug = struct {
+    access: Txn.Access,
+    src: std.builtin.SourceLocation,
+    parent: ?*Txn,
+    children: usize = 0,
+};
 
 pub const Access = enum {
     read_only,

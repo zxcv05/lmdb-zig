@@ -8,7 +8,7 @@ fn create_env(db_name: ?[:0]const u8, db_flags: lib.Dbi.InitFlags) !struct { lib
     errdefer env.deinit();
 
     const dbi: lib.Dbi = init_dbi: {
-        var txn = try env.begin(.read_write, .{});
+        var txn = try env.begin(@src(), .read_write, .{});
         defer txn.abort();
 
         var flags = db_flags;
@@ -29,17 +29,17 @@ test "nested transactions" {
     defer env.deinit();
 
     {
-        var txn_1 = try env.begin(.read_write, .{});
+        // order matters here, we must create the first cursor BEFORE the nested txn
+
+        var txn_1 = try env.begin(@src(), .read_write, .{});
         defer txn_1.abort();
 
-        const cursor_1 = dbi.cursor(txn_1);
-        defer cursor_1.deinit();
+        var cursor_1 = try dbi.cursor(@src(), &txn_1);
 
-        var txn_2 = try env.begin_nested(&txn_1, .read_write, .{});
+        var txn_2 = try env.begin_nested(@src(), &txn_1, .read_write, .{});
         defer txn_2.abort();
 
-        const cursor_2 = dbi.cursor(txn_2);
-        defer cursor_2.deinit();
+        var cursor_2 = try dbi.cursor(@src(), &txn_2);
 
         try cursor_1.put("\x01", "wow");
         try cursor_2.put("\x02", "yay");
@@ -50,10 +50,10 @@ test "nested transactions" {
         try txn_1.commit();
     }
 
-    var txn = try env.begin(.read_only, .{});
+    var txn = try env.begin(@src(), .read_only, .{});
     defer txn.abort();
 
-    const cursor = dbi.cursor(txn);
+    const cursor = try dbi.cursor(@src(), &txn);
     defer cursor.deinit();
 
     var iter = cursor.get_iter(.first, null, null, .next);
@@ -75,11 +75,9 @@ test "cursor put + get" {
     for (&datas) |*data| rng.fill(data);
 
     {
-        var txn = try env.begin(.read_write, .{});
+        var txn = try env.begin(@src(), .read_write, .{});
+        var cursor = try txn.cursor(@src(), dbi);
         defer txn.abort();
-
-        const cursor = txn.cursor(dbi);
-        defer cursor.deinit();
 
         for (&datas, 0..) |*data, i| {
             const key: u8 = @intCast(i);
@@ -89,10 +87,10 @@ test "cursor put + get" {
         try txn.commit();
     }
 
-    var txn = try env.begin(.read_only, .{});
+    var txn = try env.begin(@src(), .read_only, .{});
     defer txn.abort();
 
-    const cursor = txn.cursor(dbi);
+    const cursor = try txn.cursor(@src(), dbi);
     defer cursor.deinit();
 
     var iter = cursor.get_iter(.first, null, null, .next);
@@ -118,11 +116,9 @@ test "dupsort cursor put + get" {
     for (&datas) |*lv1| for (lv1) |*lv2| rng.fill(lv2);
 
     {
-        var txn = try env.begin(.read_write, .{});
+        var txn = try env.begin(@src(), .read_write, .{});
+        var cursor = try txn.cursor(@src(), dbi);
         defer txn.abort();
-
-        const cursor = txn.cursor(dbi);
-        defer cursor.deinit();
 
         for (&datas, 0..) |*lv1, i| for (lv1) |*lv2| {
             const key: u8 = @intCast(i);
@@ -132,10 +128,10 @@ test "dupsort cursor put + get" {
         try txn.commit();
     }
 
-    var txn = try env.begin(.read_only, .{});
+    var txn = try env.begin(@src(), .read_only, .{});
     defer txn.abort();
 
-    const cursor = txn.cursor(dbi);
+    const cursor = try txn.cursor(@src(), dbi);
     defer cursor.deinit();
 
     const init_k, _ = cursor.get(.first, null, null) orelse unreachable;
@@ -161,11 +157,9 @@ test "put_or_get + del" {
     defer env.deinit();
 
     {
-        var txn = try env.begin(.read_write, .{});
+        var txn = try env.begin(@src(), .read_write, .{});
+        var cursor = try txn.cursor(@src(), dbi);
         defer txn.abort();
-
-        const cursor = txn.cursor(dbi);
-        defer cursor.deinit();
 
         try std.testing.expectEqualStrings("data1", try cursor.put_get("key1", "data1"));
         try std.testing.expectEqualStrings("data1", try cursor.put_get("key1", "garbage"));
@@ -177,7 +171,7 @@ test "put_or_get + del" {
     }
 
     {
-        var txn = try env.begin(.read_write, .{});
+        var txn = try env.begin(@src(), .read_write, .{});
         defer txn.abort();
 
         try std.testing.expectEqualStrings("data1", try dbi.put_get(txn, "key1", "dumpster"));
@@ -189,10 +183,10 @@ test "put_or_get + del" {
         try txn.commit();
     }
 
-    var txn = try env.begin(.read_only, .{});
+    var txn = try env.begin(@src(), .read_only, .{});
     defer txn.abort();
 
-    const cursor = txn.cursor(dbi);
+    const cursor = try txn.cursor(@src(), dbi);
     defer cursor.deinit();
 
     var iter = cursor.get_iter(.first, null, null, .next);
@@ -215,10 +209,10 @@ test "put_or_get + del" {
 //     defer env.deinit();
 
 //     {
-//         var txn = try env.begin(.read_write, .{});
+//         var txn = try env.begin(@src(), .read_write, .{});
 //         defer txn.abort();
 
-//         const cursor = dbi.cursor(txn);
+//         const cursor = try dbi.cursor(@src(), txn);
 //         defer cursor.deinit();
 
 //         const appended = try cursor.put_multiple(u16, "\x00", &.{ 0x1234, 0x2345, 0x3456, 0x4567, 0x5678 });
@@ -227,10 +221,10 @@ test "put_or_get + del" {
 //         try txn.commit();
 //     }
 
-//     var txn = try env.begin(.read_only, .{});
+//     var txn = try env.begin(@src(), .read_only, .{});
 //     defer txn.abort();
 
-//     const cursor = dbi.cursor(txn);
+//     const cursor = try dbi.cursor(@src(), txn);
 //     defer cursor.deinit();
 
 //     var iter = cursor.get_iter(.first_dup, "\x00", null, .next_dup);
@@ -263,11 +257,9 @@ test "put_append" {
     std.mem.sort([32]u8, &data, SortContext{}, SortContext.lessThan);
 
     {
-        var txn = try env.begin(.read_write, .{});
+        var txn = try env.begin(@src(), .read_write, .{});
+        var cursor = try dbi.cursor(@src(), &txn);
         defer txn.abort();
-
-        const cursor = dbi.cursor(txn);
-        defer cursor.deinit();
 
         for (&data, 0..) |*lv1, i| {
             const key: u8 = @intCast(i);
@@ -277,10 +269,10 @@ test "put_append" {
         try txn.commit();
     }
 
-    var txn = try env.begin(.read_only, .{});
+    var txn = try env.begin(@src(), .read_only, .{});
     defer txn.abort();
 
-    const cursor = dbi.cursor(txn);
+    const cursor = try dbi.cursor(@src(), &txn);
     defer cursor.deinit();
 
     var iter = cursor.get_iter(.first, null, null, .next_dup);
@@ -316,11 +308,9 @@ test "put_append_dup" {
     std.mem.sort([32]u8, &data, SortContext{}, SortContext.lessThan);
 
     {
-        var txn = try env.begin(.read_write, .{});
+        var txn = try env.begin(@src(), .read_write, .{});
+        var cursor = try dbi.cursor(@src(), &txn);
         defer txn.abort();
-
-        const cursor = dbi.cursor(txn);
-        defer cursor.deinit();
 
         for (&data) |*lv1| {
             try cursor.put_append_dup("\x00", lv1);
@@ -329,10 +319,10 @@ test "put_append_dup" {
         try txn.commit();
     }
 
-    var txn = try env.begin(.read_only, .{});
+    var txn = try env.begin(@src(), .read_only, .{});
     defer txn.abort();
 
-    const cursor = dbi.cursor(txn);
+    const cursor = try dbi.cursor(@src(), &txn);
     defer cursor.deinit();
 
     var iter = cursor.get_iter(.first_dup, "\x00", null, .next_dup);
@@ -354,18 +344,16 @@ test "empty_contents" {
     defer env.deinit();
 
     {
-        var txn = try env.begin(.read_write, .{});
+        var txn = try env.begin(@src(), .read_write, .{});
+        var cursor = try txn.cursor(@src(), dbi);
         defer txn.abort();
-
-        const cursor = txn.cursor(dbi);
-        defer cursor.deinit();
 
         try cursor.put("hello", "world");
         try txn.commit();
     }
 
     {
-        var txn = try env.begin(.read_only, .{});
+        var txn = try env.begin(@src(), .read_only, .{});
         defer txn.abort();
 
         try std.testing.expectEqualStrings(
@@ -375,7 +363,7 @@ test "empty_contents" {
     }
 
     {
-        var txn = try env.begin(.read_write, .{});
+        var txn = try env.begin(@src(), .read_write, .{});
         defer txn.abort();
 
         try std.testing.expect(dbi.empty_contents(txn));
@@ -383,9 +371,61 @@ test "empty_contents" {
     }
 
     {
-        var txn = try env.begin(.read_only, .{});
+        var txn = try env.begin(@src(), .read_only, .{});
         defer txn.abort();
 
         try std.testing.expect(dbi.get(txn, "hello") == null);
+    }
+}
+
+test "Debug safety" {
+    if (@import("builtin").mode != .Debug) return error.SkipZigTest;
+
+    const env, const dbi = try create_env("debug-safety", .{});
+    defer env.deinit();
+
+    // txn abort() then commit()
+    {
+        var txn = try env.begin(@src(), .read_write, .{});
+        txn.abort();
+        try std.testing.expectError(error.Invalid, txn.commit());
+    }
+
+    // txn bad access
+    {
+        var txn = try env.begin(@src(), .read_write, .{});
+        defer txn.abort();
+
+        try std.testing.expectError(error.BadAccess, txn.reset_renew());
+    }
+
+    // txn has children
+    {
+        var txn = try env.begin(@src(), .read_write, .{});
+        defer txn.abort();
+
+        var child_txn = try env.begin_nested(@src(), &txn, .read_write, .{});
+        defer child_txn.abort();
+
+        try std.testing.expectError(error.TxnHasChildren, txn.cursor(@src(), dbi));
+        try std.testing.expectError(error.TxnHasChildren, txn.reset_renew());
+    }
+
+    // cursor bad access
+    {
+        var txn = try env.begin(@src(), .read_only, .{});
+        defer txn.abort();
+
+        var cursor = try txn.cursor(@src(), dbi);
+        defer cursor.deinit();
+
+        try std.testing.expectError(error.BadAccess, cursor.put(undefined, undefined));
+        try std.testing.expectError(error.BadAccess, cursor.put_replace(undefined, undefined));
+        try std.testing.expectError(error.BadAccess, cursor.put_no_clobber(undefined, undefined));
+        try std.testing.expectError(error.BadAccess, cursor.put_get(undefined, undefined));
+        try std.testing.expectError(error.BadAccess, cursor.put_append(undefined, undefined));
+        try std.testing.expectError(error.BadAccess, cursor.put_append_dup(undefined, undefined));
+        try std.testing.expectError(error.BadAccess, cursor.del());
+        try std.testing.expectError(error.BadAccess, cursor.del_all());
     }
 }

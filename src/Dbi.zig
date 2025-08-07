@@ -9,6 +9,8 @@ const Env = @import("Env.zig");
 const Txn = @import("Txn.zig");
 const Val = @import("Val.zig");
 
+const DEBUG = @import("builtin").mode == .Debug;
+
 const Dbi = @This();
 
 handle: c.MDB_dbi,
@@ -146,7 +148,7 @@ pub fn del(this: Dbi, txn: Txn, key: []const u8, data: ?[]const u8) !void {
 /// Deletes all data contained in database, doesnt free handle
 /// Returns true on success
 pub fn empty_contents(this: Dbi, txn: Txn) bool {
-    return c.mdb_drop(txn.inner, this.handle, 0) == 0;
+    return c.mdb_drop(txn.inner, this.handle, 0) == @intFromEnum(root.E.SUCCESS);
 }
 
 /// This is unnecessary! Use with care!
@@ -171,7 +173,7 @@ pub fn free_handle(this: *Dbi, env: Env) void {
 /// Deletes database from the environment and frees handle
 /// Returns true on success
 pub fn delete_and_free(this: *Dbi, txn: Txn) bool {
-    if (c.mdb_drop(txn.inner, this.handle, 1) == 0) {
+    if (c.mdb_drop(txn.inner, this.handle, 1) == @intFromEnum(root.E.SUCCESS)) {
         this.* = undefined;
         return true;
     }
@@ -201,10 +203,8 @@ pub fn cmp_data(this: Dbi, txn: Txn, a: []const u8, b: []const u8) std.math.Orde
     return .eq;
 }
 
-pub fn cursor(dbi: Dbi, txn: Txn) Cursor {
-    var ptr: ?*c.MDB_cursor = undefined;
-    if (c.mdb_cursor_open(txn.inner, dbi.handle, &ptr) != @intFromEnum(root.E.SUCCESS)) unreachable;
-    return .{ .inner = ptr.? };
+pub inline fn cursor(dbi: Dbi, src: std.builtin.SourceLocation, txn: *const Txn) !Cursor {
+    return Cursor.init(src, dbi, txn);
 }
 
 pub const InitFlags = packed struct {

@@ -86,19 +86,22 @@ pub fn sync(this: Env, force: bool) !void {
 }
 
 /// Open a database
+/// Also see `Dbi.init()`
 pub fn open(this: Env, txn: Txn, name: ?[:0]const u8, flags: Dbi.InitFlags) !Dbi {
     _ = this;
     return Dbi.init(txn, name, flags);
 }
 
 /// Create a transaction
-pub fn begin(this: Env, access: Txn.Access, flags: Txn.InitFlags) !Txn {
-    return Txn.init(this, null, access, flags);
+/// Also see `Txn.init()`
+pub fn begin(this: Env, src: std.builtin.SourceLocation, access: Txn.Access, flags: Txn.InitFlags) !Txn {
+    return Txn.init(this, src, null, access, flags);
 }
 
 /// Create a nested transaction
-pub fn begin_nested(this: Env, parent: *const Txn, access: Txn.Access, flags: Txn.InitFlags) !Txn {
-    return Txn.init(this, parent, access, flags);
+/// Also see `Txn.init()`
+pub fn begin_nested(this: Env, src: std.builtin.SourceLocation, parent: *Txn, access: Txn.Access, flags: Txn.InitFlags) !Txn {
+    return Txn.init(this, src, parent, access, flags);
 }
 
 /// See `http://www.lmdb.tech/doc/group__mdb.html#ga5040d0de1f14000fa01fc0b522ff1f86`
