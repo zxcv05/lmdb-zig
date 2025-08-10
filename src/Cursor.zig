@@ -13,7 +13,7 @@ const utils = @import("utils.zig");
 const Cursor = @This();
 
 inner: *c.MDB_cursor,
-debug: if (utils.DEBUG) Debug,
+debug: if (utils.DEBUG) Debug else void,
 
 /// Cursor inherits `txn`s access mode
 pub fn init(src: std.builtin.SourceLocation, dbi: Dbi, txn: *const Txn) !Cursor {

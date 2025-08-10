@@ -16,7 +16,7 @@ const Txn = @This();
 
 inner: *c.MDB_txn,
 done: bool = false,
-debug: if (utils.DEBUG) Debug,
+debug: if (utils.DEBUG) Debug else void,
 
 /// Create new transaction - See `Env.begin*(...)`
 /// Only one read_only txn per thread is allowed
