@@ -114,6 +114,16 @@ pub fn put_append_dup(this: Dbi, txn: Txn, key: []const u8, data: []const u8) !v
     };
 }
 
+/// `put()` with `reserve` flag
+/// NOT supported for DUPSORT databased
+pub fn put_reserve(this: Dbi, txn: Txn, key: []const u8, size: usize) ![]u8 {
+    var c_key: Val = .from_const(key);
+    var c_data: Val = .of_size(size);
+
+    try this.put_impl(txn, c_key.alias(), c_data.alias(), root.all_flags.reserve);
+    return c_data.unalias();
+}
+
 fn put_impl(this: Dbi, txn: Txn, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags: c_uint) !void {
     return switch (root.errno(
         c.mdb_put(txn.inner, this.handle, c_key, c_data, flags),

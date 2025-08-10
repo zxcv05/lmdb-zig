@@ -196,6 +196,21 @@ pub fn put_append_dup(this: *Cursor, key: []const u8, data: []const u8) !void {
     };
 }
 
+/// `put()` with `reserve` flag
+/// NOT supported for DUPSORT databased
+pub fn put_reserve(this: *Cursor, key: []const u8, size: usize) ![]u8 {
+    if (utils.DEBUG and this.debug.access != .read_write) {
+        utils.printWithSrc(this.debug.src, "put_reserve() called on read_only {*}", .{this});
+        return error.BadAccess;
+    }
+
+    var c_key: Val = .from_const(key);
+    var c_data: Val = .of_size(size);
+
+    try this.put_impl(c_key.alias(), c_data.alias(), root.all_flags.reserve);
+    return c_data.unalias();
+}
+
 /// `put()` with `multiple` flag
 /// supported for DUPFIXED databases
 // pub fn put_multiple(this: Cursor, comptime T: type, key: []const u8, data: []const T) !usize {

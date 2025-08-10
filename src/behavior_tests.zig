@@ -339,6 +339,34 @@ test "put_append_dup" {
     try std.testing.expectEqual(data.len, i);
 }
 
+test "put_reserve" {
+    var rng: std.Random.Xoroshiro128 = .init(std.testing.random_seed);
+
+    const env, const dbi = try create_env("put-reserve", .{});
+    defer env.deinit();
+
+    var data: [32]u8 = undefined;
+    rng.fill(&data);
+
+    {
+        var txn = try env.begin(@src(), .read_write, .{});
+        var cursor = try dbi.cursor(@src(), &txn);
+        defer txn.abort();
+
+        const output = try cursor.put_reserve("key0", data.len);
+        try std.testing.expectEqual(data.len, output.len);
+
+        @memcpy(output, &data);
+        try txn.commit();
+    }
+
+    var txn = try env.begin(@src(), .read_only, .{});
+    defer txn.abort();
+
+    const v = dbi.get_const(txn, "key0") orelse return error.NotFound;
+    try std.testing.expectEqualSlices(u8, &data, v);
+}
+
 test "empty_contents" {
     const env, const dbi = try create_env("empty-contents", .{ .dup_sort = true, .dup_fixed = true });
     defer env.deinit();
