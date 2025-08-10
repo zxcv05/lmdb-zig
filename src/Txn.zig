@@ -10,7 +10,7 @@ const Cursor = @import("Cursor.zig");
 const Dbi = @import("Dbi.zig");
 const Env = @import("Env.zig");
 
-// TODO: make Txn and Cursor generic with comptime known access mode, make BadAccess raise compile error
+// TODO: make Txn and Cursor generic with comptime known access mode, replace BadAccess w/ compile error
 
 const Txn = @This();
 
@@ -124,6 +124,52 @@ pub fn reset_renew(this: *Txn) !void {
         .SUCCESS => this.done = false,
         else => return error.RenewFailed,
     }
+}
+
+pub inline fn get(this: Txn, dbi: Dbi, key: []const u8) ?[]u8 {
+    return dbi.get(this, key);
+}
+
+pub inline fn get_const(this: Txn, dbi: Dbi, key: []const u8) ?[]const u8 {
+    return this.get(dbi, key);
+}
+
+pub inline fn put(this: Txn, dbi: Dbi, key: []const u8, data: []const u8) !void {
+    return dbi.put(this, key, data);
+}
+
+/// `put()` with `no_dup_data` flag
+/// supported for DUPSORT databases
+pub inline fn put_no_clobber(this: Txn, dbi: Dbi, key: []const u8, data: []const u8) !void {
+    return dbi.put_no_clobber(this, key, data);
+}
+
+/// `put()` with `no_overwrite` flag
+pub inline fn put_get(this: Txn, dbi: Dbi, key: []const u8, data: []const u8) ![]u8 {
+    return dbi.put_get(this, key, data);
+}
+
+/// `put()` with `append` flag
+/// must be sorted
+pub inline fn put_append(this: Txn, dbi: Dbi, key: []const u8, data: []const u8) !void {
+    return dbi.put_append(this, key, data);
+}
+
+/// `put()` with `append_dup` flag
+/// supported for DUPSORT databases
+pub inline fn put_append_dup(this: Txn, dbi: Dbi, key: []const u8, data: []const u8) !void {
+    return dbi.put_append_dup(this, key, data);
+}
+
+/// `put()` with `reserve` flag
+/// NOT supported for DUPSORT databased
+pub inline fn put_reserve(this: Txn, dbi: Dbi, key: []const u8, size: usize) ![]u8 {
+    return dbi.put_reserve(this, key, size);
+}
+
+/// note: "NOTFOUND" is not considered an error condition
+pub inline fn del(this: Txn, dbi: Dbi, key: []const u8, data: ?[]const u8) !void {
+    return dbi.del(this, key, data);
 }
 
 pub inline fn cursor(txn: *const Txn, src: std.builtin.SourceLocation, dbi: Dbi) !Cursor {

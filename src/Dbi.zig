@@ -58,7 +58,7 @@ pub fn get(this: Dbi, txn: Txn, key: []const u8) ?[]u8 {
     }
 }
 
-pub fn get_const(this: Dbi, txn: Txn, key: []const u8) ?[]const u8 {
+pub inline fn get_const(this: Dbi, txn: Txn, key: []const u8) ?[]const u8 {
     return this.get(txn, key);
 }
 
