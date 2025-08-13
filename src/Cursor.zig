@@ -274,10 +274,11 @@ fn del_impl(this: Cursor, flags: c_uint) !void {
     };
 }
 
+/// errors treated as null
 /// supported for DUPSORT databases
-pub fn count(this: *const Cursor) usize {
+pub fn count(this: *const Cursor) ?usize {
     var ret: c_ulong = 0;
-    std.debug.assert(c.mdb_cursor_count(this.inner, &ret) == 0);
+    if (c.mdb_cursor_count(this.inner, &ret) != @intFromEnum(root.E.SUCCESS)) return null;
     return @intCast(ret);
 }
 

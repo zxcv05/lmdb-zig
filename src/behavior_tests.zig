@@ -395,7 +395,7 @@ test "Cursor count" {
     defer cursor.deinit();
 
     _ = cursor.get(.set, "\x00", null);
-    try std.testing.expectEqual(ROUNDS, cursor.count());
+    try std.testing.expectEqual(ROUNDS, cursor.count().?);
 }
 
 test "empty_contents" {
