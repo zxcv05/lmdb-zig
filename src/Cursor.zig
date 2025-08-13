@@ -274,6 +274,13 @@ fn del_impl(this: Cursor, flags: c_uint) !void {
     };
 }
 
+/// supported for DUPSORT databases
+pub fn count(this: *const Cursor) usize {
+    var ret: c_ulong = 0;
+    std.debug.assert(c.mdb_cursor_count(this.inner, &ret) == 0);
+    return @intCast(ret);
+}
+
 const Debug = struct {
     access: Txn.Access,
     src: std.builtin.SourceLocation,

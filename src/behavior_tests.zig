@@ -4,7 +4,7 @@ const lib = @import("root.zig");
 const c = @import("c");
 
 fn create_env(db_name: ?[:0]const u8, db_flags: lib.Dbi.InitFlags) !struct { lib.Env, lib.Dbi } {
-    const env: lib.Env = try .init("./testdb/", .{ .max_dbs = 8 });
+    const env: lib.Env = try .init("./testdb/", .{ .max_dbs = 64 });
     errdefer env.deinit();
 
     const dbi: lib.Dbi = init_dbi: {
@@ -365,6 +365,37 @@ test "put_reserve" {
 
     const v = dbi.get_const(txn, "key0") orelse return error.NotFound;
     try std.testing.expectEqualSlices(u8, &data, v);
+}
+
+test "Cursor count" {
+    var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+    const ROUNDS = 8;
+
+    const env, const dbi = try create_env("cursor-count", .{ .dup_sort = true });
+    defer env.deinit();
+
+    {
+        var txn = try env.begin(@src(), .read_write, .{});
+        var cursor = try dbi.cursor(@src(), &txn);
+        defer txn.abort();
+
+        var data: [32]u8 = undefined;
+        for (0..ROUNDS) |_| {
+            rng.fill(&data);
+            try cursor.put("\x00", &data);
+        }
+
+        try txn.commit();
+    }
+
+    var txn = try env.begin(@src(), .read_only, .{});
+    defer txn.abort();
+
+    const cursor = try dbi.cursor(@src(), &txn);
+    defer cursor.deinit();
+
+    _ = cursor.get(.set, "\x00", null);
+    try std.testing.expectEqual(ROUNDS, cursor.count());
 }
 
 test "empty_contents" {
