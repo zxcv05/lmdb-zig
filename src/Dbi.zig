@@ -49,13 +49,19 @@ pub fn get(this: Dbi, txn: Txn, key: []const u8) ?[]u8 {
     var c_key: Val = .from_const(key);
     var c_out: Val = .empty;
 
-    switch (root.errno(
+    return switch (root.errno(
         c.mdb_get(txn.inner, this.handle, c_key.alias(), c_out.alias()),
     )) {
-        .SUCCESS => return c_out.unalias(),
-        .NOTFOUND => return null,
-        else => unreachable,
-    }
+        .SUCCESS => c_out.unalias(),
+        .NOTFOUND => null,
+        else => |rc| switch(@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+            .INVAL => @panic("Invalid"),
+            else => {
+                std.debug.print("Dbi.get: {any}\n", .{rc});
+                unreachable;
+            }
+        },
+    };
 }
 
 pub inline fn get_const(this: Dbi, txn: Txn, key: []const u8) ?[]const u8 {
