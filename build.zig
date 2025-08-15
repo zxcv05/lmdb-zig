@@ -38,17 +38,10 @@ pub fn build(b: *std.Build) !void {
 
     // unit tests
 
-    var filter_iter = std.mem.splitScalar(u8, test_filter, ';');
-    var filters = try std.ArrayList([]const u8).initCapacity(b.allocator, 16);
-
-    while (filter_iter.next()) |filter| {
-        (try filters.addOne()).* = filter;
-    }
-
     const unit_tests = b.addTest(.{
         .root_module = root_mod,
-        .filters = filters.items,
         .use_llvm = false,
+        .filters = &.{test_filter},
     });
 
     if (tests_use_system_lib) {

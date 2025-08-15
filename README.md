@@ -55,6 +55,9 @@ const lmdb_dep = b.dependency("lmdb", .{ .target = target, .optimize = optimize,
   - `-Dtest-filter='x'`: For `test` step, filter which tests are run based on `x`
   - `-Dtests-use-system-lib`: For `test` step, use system installed `liblmdb` library instead of the one we build (default: false)
 
+## todo:
+- Improve error handling w/ https://github.com/ziglang/zig/pull/24381 (post 0.15.0)
+
 # License
 This project is subject to the terms of the OpenLDAP Public License v2.8 (See `LICENSE`)
 Copyright 2025 lmdb-zig contributors
