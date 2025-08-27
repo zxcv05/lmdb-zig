@@ -7,6 +7,7 @@ const c = @import("c");
 const Dbi = @import("Dbi.zig");
 const Txn = @import("Txn.zig");
 
+const log = std.log.scoped(.lmdb);
 const Env = @This();
 
 inner: *c.MDB_env,
@@ -43,28 +44,33 @@ pub fn init(path: [:0]const u8, options: InitOptions) !Env {
             flags_int |= @field(root.all_flags, flag.name);
     }
 
-    switch (root.errno(c.mdb_env_open(
+    return switch (root.errno(c.mdb_env_open(
         env,
         path.ptr,
         flags_int,
         @intCast(options.mode),
     ))) {
-        .SUCCESS => {},
-        .INVALID => return error.CorruptedHeaders,
-        .VERSION_MISMATCH => return error.VersionMismatch,
+        .SUCCESS => .{ .inner = env },
+        .INVALID => error.CorruptedHeaders,
+        .VERSION_MISMATCH => error.VersionMismatch,
+
+        _ => |rc| {
+            log.debug("Env.init: {t}", .{rc});
+            unreachable;
+        },
+
         else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
-            .NOTDIR => return error.NotADirectory,
-            .NOENT => return error.PathDoesntExist,
-            .ACCES => return error.PermissionDenied,
-            .AGAIN => return error.EnvironmentLocked,
-            else => |rc2| {
-                std.debug.print("{any} {any} {d}", .{ rc, rc2, @intFromEnum(rc) });
+            .NOTDIR => error.NotADirectory,
+            .NOENT => error.PathDoesntExist,
+            .ACCES => error.PermissionDenied,
+            .AGAIN => error.EnvironmentLocked,
+
+            else => {
+                log.debug("Env.init: {any}", .{rc});
                 unreachable;
             },
         },
-    }
-
-    return .{ .inner = env };
+    };
 }
 
 /// All transactions and cursors must already be closed before this call
@@ -81,7 +87,11 @@ pub fn sync(this: Env, force: bool) !void {
         .ACCES => return error.ReadOnly,
         .INVAL => return error.Invalid,
         .IO => return error.IoError,
-        else => unreachable,
+
+        else => |rc| {
+            log.debug("Env.sync: {any}", .{rc});
+            unreachable;
+        },
     }
 }
 
@@ -105,15 +115,15 @@ pub fn begin_nested(this: Env, src: std.builtin.SourceLocation, parent: *Txn, ac
 }
 
 /// See `http://www.lmdb.tech/doc/group__mdb.html#ga5040d0de1f14000fa01fc0b522ff1f86`
-/// return indicates success
-pub fn copy_to_fd(this: Env, fd: std.posix.fd_t, flags: CopyFlags) bool {
+pub fn copy_to_fd(this: Env, fd: std.posix.fd_t, flags: CopyFlags) !void {
     var flags_int: c_uint = 0;
     inline for (std.meta.fields(CopyFlags)) |flag| {
         if (@field(flags, flag.name))
             flags_int |= @field(root.all_flags, flag.name);
     }
 
-    return c.mdb_env_copyfd2(this.inner, fd, flags_int) == @intFromEnum(root.E.SUCCESS);
+    if (c.mdb_env_copyfd2(this.inner, fd, flags_int) != @intFromEnum(root.E.SUCCESS))
+        return error.Copyfd2Failed;
 }
 
 pub fn get_stats(this: Env) c.MDB_stat {

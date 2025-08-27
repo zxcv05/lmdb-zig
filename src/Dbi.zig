@@ -9,7 +9,8 @@ const Env = @import("Env.zig");
 const Txn = @import("Txn.zig");
 const Val = @import("Val.zig");
 
-const DEBUG = @import("builtin").mode == .Debug;
+const utils = @import("utils.zig");
+const log = std.log.scoped(.lmdb);
 
 const Dbi = @This();
 
@@ -24,19 +25,25 @@ pub fn init(txn: Txn, name: ?[:0]const u8, flags: InitFlags) !Dbi {
 
     var dbi: c.MDB_dbi = undefined;
 
-    switch (root.errno(
+    return switch (root.errno(
         c.mdb_dbi_open(txn.inner, if (name) |n| n.ptr else null, flags_int, &dbi),
     )) {
-        .SUCCESS => return .{ .handle = dbi },
-        .NOTFOUND => return error.NotFound,
-        .DBS_FULL => return error.TooMany, // maxdbs reached
-        .BAD_VALSIZE => return error.BadValsize, // unsupported size of key/db name/data, or wrong DUPFIXED size
-        .INCOMPATIBLE => return error.Incompatible, // database was dropped and opened with different flags
+        .SUCCESS => .{ .handle = dbi },
+        .NOTFOUND => error.NotFound,
+        .DBS_FULL => error.TooMany, // maxdbs reached
+        .BAD_VALSIZE => error.BadValsize, // unsupported size of key/db name/data, or wrong DUPFIXED size
+        .INCOMPATIBLE => error.Incompatible, // database was dropped and opened with different flags
+
         else => |rc| {
-            std.debug.print("Dbi.init: {any}\n", .{rc});
+            log.debug("Dbi.init: {t}", .{rc});
             unreachable;
         },
-    }
+
+        _ => |rc| {
+            log.debug("Dbi.init: {any}", .{rc});
+            unreachable;
+        },
+    };
 }
 
 pub fn get_stats(this: Dbi, txn: Txn) c.MDB_stat {
@@ -54,12 +61,19 @@ pub fn get(this: Dbi, txn: Txn, key: []const u8) ?[]u8 {
     )) {
         .SUCCESS => c_out.unalias(),
         .NOTFOUND => null,
-        else => |rc| switch(@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+
+        else => |rc| {
+            log.debug("Dbi.get: {t}", .{rc});
+            unreachable;
+        },
+
+        _ => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
             .INVAL => @panic("Invalid"),
+
             else => {
-                std.debug.print("Dbi.get: {any}\n", .{rc});
+                log.debug("Dbi.get: {any}", .{rc});
                 unreachable;
-            }
+            },
         },
     };
 }
@@ -138,10 +152,19 @@ fn put_impl(this: Dbi, txn: Txn, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags:
         .MAP_FULL => error.MapFull,
         .TXN_FULL => error.TxnFull,
         .KEYEXIST => error.AlreadyExists,
+        _ => |rc| {
+            log.debug("Dbi.put_impl: {t}", .{rc});
+            unreachable;
+        },
+
         else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
             .ACCES => error.ReadOnly,
             .INVAL => error.Invalid,
-            else => unreachable,
+
+            else => {
+                log.debug("Dbi.put_impl: {any}", .{rc});
+                unreachable;
+            },
         },
     };
 }
@@ -153,10 +176,19 @@ pub fn del(this: Dbi, txn: Txn, key: []const u8, data: ?[]const u8) !void {
 
     return switch (root.errno(c.mdb_del(txn.inner, this.handle, c_key.alias(), c_data.alias()))) {
         .NOTFOUND, .SUCCESS => {},
+        _ => |rc| {
+            log.debug("Dbi.del: {t}", .{rc});
+            unreachable;
+        },
+
         else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
             .ACCES => error.ReadOnly,
             .INVAL => error.Invalid,
-            else => unreachable,
+
+            else => {
+                log.debug("Dbi.del: {any}", .{rc});
+                unreachable;
+            },
         },
     };
 }

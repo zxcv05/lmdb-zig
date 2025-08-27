@@ -9,6 +9,7 @@ const Txn = @import("Txn.zig");
 const Val = @import("Val.zig");
 
 const utils = @import("utils.zig");
+const log = std.log.scoped(.lmdb);
 
 const Cursor = @This();
 
@@ -35,7 +36,10 @@ pub fn init(src: std.builtin.SourceLocation, dbi: Dbi, txn: *const Txn) !Cursor 
                 .owner = txn,
             },
         },
-        else => unreachable,
+        else => |rc| {
+            log.debug("Cursor.init: {any}", .{rc});
+            unreachable;
+        },
     }
 }
 
@@ -93,15 +97,7 @@ fn get_impl(this: Cursor, op: GetOp, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val) bo
     }
 }
 
-pub fn get_iter(
-    this: *const Cursor,
-    init_op: GetOp,
-    init_key: ?[]const u8,
-    init_data: ?[]const u8,
-    next_op: GetOp,
-) GetIterator {
-    return GetIterator.init(this, init_op, init_key, init_data, next_op);
-}
+pub const get_iter = GetIterator.init;
 
 pub fn put(this: *Cursor, key: []const u8, data: []const u8) !void {
     if (utils.DEBUG and this.debug.access != .read_write) {
@@ -234,10 +230,18 @@ fn put_impl(this: Cursor, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags: c_uint
         .MAP_FULL => return error.MapFull,
         .TXN_FULL => return error.TxnFull,
         .KEYEXIST => return error.AlreadyExists,
+        _ => |rc| {
+            log.debug("Cursor.put_impl: {t}", .{rc});
+            unreachable;
+        },
+
         else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
             .ACCES => return error.ReadOnly,
             .INVAL => return error.Invalid,
-            else => unreachable,
+            else => {
+                log.debug("Cursor.put_impl: {any}", .{rc});
+                unreachable;
+            },
         },
     }
 }
@@ -270,7 +274,10 @@ fn del_impl(this: Cursor, flags: c_uint) !void {
         .SUCCESS => {},
         .ACCES => error.ReadOnly,
         .INVAL => error.Invalid,
-        else => unreachable,
+        else => |rc| {
+            log.debug("Cursor.del_impl: {any}", .{rc});
+            unreachable;
+        },
     };
 }
 
@@ -360,7 +367,7 @@ pub const GetIterator = struct {
         };
     }
 
-    pub const State = packed struct {
+    pub const State = struct {
         next_op: GetOp,
         skip: bool = true,
         found: bool = false,

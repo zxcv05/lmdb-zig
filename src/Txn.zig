@@ -10,6 +10,8 @@ const Cursor = @import("Cursor.zig");
 const Dbi = @import("Dbi.zig");
 const Env = @import("Env.zig");
 
+const log = std.log.scoped(.lmdb);
+
 // TODO: make Txn and Cursor generic with comptime known access mode, replace BadAccess w/ compile error
 
 const Txn = @This();
@@ -48,10 +50,20 @@ pub fn init(
         .BAD_TXN => return error.BadParent,
         .MAP_RESIZED => return error.MapResized,
         .READERS_FULL => return error.ReadersFull,
+
+        _ => |rc| {
+            log.debug("Txn.init: {t}", .{rc});
+            unreachable;
+        },
+
         else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
             .NOMEM => return error.OutOfMemory,
             .INVAL => return error.BlockedByReadOnlyTxn,
-            else => unreachable,
+
+            else => {
+                log.debug("Txn.init: {any}", .{rc});
+                unreachable;
+            },
         },
     }
 
@@ -82,16 +94,20 @@ pub fn commit(this: *Txn) !void {
     }
 
     defer this.done = true;
-    switch (@as(std.posix.E, @enumFromInt(
+    return switch (@as(std.posix.E, @enumFromInt(
         c.mdb_txn_commit(this.inner),
     ))) {
         .SUCCESS => {},
-        .INVAL => return error.Invalid,
-        .NOSPC => return error.NoSpaceLeft,
-        .NOMEM => return error.OutOfMemory,
-        .IO => return error.IoError,
-        else => unreachable,
-    }
+        .INVAL => error.Invalid,
+        .NOSPC => error.NoSpaceLeft,
+        .NOMEM => error.OutOfMemory,
+        .IO => error.IoError,
+
+        else => |rc| {
+            log.debug("Txn.commit: {any}", .{rc});
+            unreachable;
+        },
+    };
 }
 
 /// Abandon all changes made by this transaction
