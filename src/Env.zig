@@ -7,7 +7,9 @@ const c = @import("c");
 const Dbi = @import("Dbi.zig");
 const Txn = @import("Txn.zig");
 
+const utils = @import("utils.zig");
 const log = std.log.scoped(.lmdb);
+
 const Env = @This();
 
 inner: *c.MDB_env,
@@ -15,26 +17,29 @@ inner: *c.MDB_env,
 pub fn init(path: [:0]const u8, options: InitOptions) !Env {
     // create environment
 
-    const env: *c.MDB_env = wrap: {
+    const env: *c.MDB_env = unwrap: {
         var maybe_env: ?*c.MDB_env = null;
         _ = c.mdb_env_create(&maybe_env);
-        break :wrap maybe_env orelse return error.EnvCreateFailed;
+        break :unwrap maybe_env orelse return error.EnvCreateFailed;
     };
     errdefer c.mdb_env_close(env);
 
     // setup environment
 
+    var options_rc: c_int = 0;
     if (options.max_readers) |max_readers| {
-        if (c.mdb_env_set_maxreaders(env, @intCast(max_readers)) != @intFromEnum(root.E.SUCCESS)) unreachable;
+        options_rc |= c.mdb_env_set_maxreaders(env, @intCast(max_readers));
     }
 
     if (options.map_size) |map_size| {
-        if (c.mdb_env_set_mapsize(env, @intCast(map_size)) != @intFromEnum(root.E.SUCCESS)) unreachable;
+        options_rc |= c.mdb_env_set_mapsize(env, @intCast(map_size));
     }
 
     if (options.max_dbs) |max_dbs| {
-        if (c.mdb_env_set_maxdbs(env, @intCast(max_dbs)) != @intFromEnum(root.E.SUCCESS)) unreachable;
+        options_rc |= c.mdb_env_set_maxdbs(env, @intCast(max_dbs));
     }
+
+    if (options_rc != @intFromEnum(root.E.SUCCESS)) return error.OptionsFailed;
 
     // open db
 
@@ -55,7 +60,7 @@ pub fn init(path: [:0]const u8, options: InitOptions) !Env {
         .VERSION_MISMATCH => error.VersionMismatch,
 
         _ => |rc| {
-            log.debug("Env.init: {t}", .{rc});
+            log.err("Env.init: {t}", .{rc});
             unreachable;
         },
 
@@ -66,7 +71,7 @@ pub fn init(path: [:0]const u8, options: InitOptions) !Env {
             .AGAIN => error.EnvironmentLocked,
 
             else => {
-                log.debug("Env.init: {any}", .{rc});
+                log.err("Env.init: {any}", .{rc});
                 unreachable;
             },
         },
@@ -89,7 +94,7 @@ pub fn sync(this: Env, force: bool) !void {
         .IO => return error.IoError,
 
         else => |rc| {
-            log.debug("Env.sync: {any}", .{rc});
+            log.err("Env.sync: {any}", .{rc});
             unreachable;
         },
     }

@@ -1,4 +1,11 @@
-//! Cursor - wrappers around mdb_cursor*
+//! Cursor -
+//!
+//! Read-only `Cursor`s (`Cursor`s owned by read-only `Txn`s) keep read database pages alive
+//! for as long as the `Cursor` is alive. As such, it must be closed explicity with
+//! `cursor.deinit()` regardless of the owning `Txn` closing.
+//!
+//! The above doesn't apply to read/write `Cursor`s. Those are closed when the owning txn closes.
+//! You can also `deinit` them any time before the owning txn closes.
 
 const root = @import("root.zig");
 const std = @import("std");
@@ -16,10 +23,14 @@ const Cursor = @This();
 inner: *c.MDB_cursor,
 debug: if (utils.DEBUG) Debug else void,
 
-/// Cursor inherits `txn`s access mode
+/// Cursor inherits `txn`s access mode, must not outlive `txn`
 pub fn init(src: std.builtin.SourceLocation, dbi: Dbi, txn: *const Txn) !Cursor {
     if (utils.DEBUG and txn.debug.children > 0) {
-        utils.printWithSrc(src, "Cursor.init() called with {*} that has {d} children", .{ txn, txn.debug.children });
+        utils.printWithSrc(
+            src,
+            "Cursor.init() called with {*} that has {d} children",
+            .{ txn, txn.debug.children },
+        );
         return error.TxnHasChildren;
     }
 
@@ -37,28 +48,33 @@ pub fn init(src: std.builtin.SourceLocation, dbi: Dbi, txn: *const Txn) !Cursor 
             },
         },
         else => |rc| {
-            log.debug("Cursor.init: {any}", .{rc});
+            log.err("Cursor.init: {any}", .{rc});
             unreachable;
         },
     }
 }
 
-/// A read_only cursor must be closed explicitly, before or after its owning txn ends
-/// A read_write cursor can be closed before its owning txn ends, and will otherwise be closed when its owning txn ends
+/// Please see top-level comment for usage information
 pub fn deinit(this: *const Cursor) void {
-    if (utils.DEBUG and this.debug.access == .read_write and this.debug.owner.done) {
-        utils.printWithSrc(
-            this.debug.src,
-            "deinit() called on read_write {*} whose owning {*} is already aborted or committed (skipping)",
-            .{ this, this.debug.owner },
-        );
-        return;
+    if (utils.DEBUG) {
+        switch (this.debug.owner.status) {
+            .open, .reset => {},
+            .aborted, .committed => if (this.debug.access == .read_write) {
+                utils.printWithSrc(
+                    this.debug.src,
+                    "deinit() called on {t} {*} whose owning {*} is already {t} (skipping)",
+                    .{ this.debug.access, this, this.debug.owner, this.debug.owner.status },
+                );
+                return;
+            },
+            .invalid => return,
+        }
     }
 
     c.mdb_cursor_close(this.inner);
 }
 
-/// Renew a *read-only* cursor
+/// Renew a read-only cursor
 pub fn renew(this: *Cursor, txn: *const Txn) !void {
     if (utils.DEBUG and this.debug.access != .read_only) {
         utils.printWithSrc(this.debug.src, "renew() called on read_write {*}", .{this});
@@ -78,7 +94,7 @@ pub fn get(this: *const Cursor, op: GetOp, key: ?[]const u8, data: ?[]const u8) 
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
-    const found = this.get_impl(op, c_key.alias(), c_data.alias());
+    const found = this.get_impl(@intFromEnum(op), c_key.alias(), c_data.alias());
     if (!found) return null;
 
     return .{
@@ -87,14 +103,28 @@ pub fn get(this: *const Cursor, op: GetOp, key: ?[]const u8, data: ?[]const u8) 
     };
 }
 
+/// Warning: Errors will be treated as "Not found" and will return null
+pub fn get_multiple(
+    this: *const Cursor,
+    comptime T: type,
+    op: GetMultipleOp,
+    key: ?[]const u8,
+) ?[]align(1) const T {
+    var c_key: Val = .from_const(key);
+    var c_data: Val = .empty;
+
+    const found = this.get_impl(@intFromEnum(op), c_key.alias(), c_data.alias());
+    if (!found) return null;
+
+    const num_elems = @divExact(c_data.data.mv_size, @sizeOf(T));
+    const typed_ptr: [*]align(1) const T = @ptrCast(c_data.data.mv_data);
+
+    return typed_ptr[0..num_elems];
+}
+
 /// returns true if data found, false if not found or error occured
-fn get_impl(this: Cursor, op: GetOp, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val) bool {
-    switch (root.errno(
-        c.mdb_cursor_get(this.inner, c_key, c_data, @intFromEnum(op)),
-    )) {
-        .NOTFOUND => return false,
-        else => |rc| return @intFromEnum(rc) >= @intFromEnum(root.E.SUCCESS),
-    }
+fn get_impl(this: Cursor, op: c_uint, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val) bool {
+    return c.mdb_cursor_get(this.inner, c_key, c_data, op) >= 0;
 }
 
 pub const get_iter = GetIterator.init;
@@ -209,18 +239,17 @@ pub fn put_reserve(this: *Cursor, key: []const u8, size: usize) ![]u8 {
 
 /// `put()` with `multiple` flag
 /// supported for DUPFIXED databases
-// pub fn put_multiple(this: Cursor, comptime T: type, key: []const u8, data: []const T) !usize {
-//     var data_actual: [2]c.MDB_val = .{
-//         .{ .mv_size = @sizeOf(T), .mv_data = @ptrCast(@constCast(data.ptr)) },
-//         .{ .mv_size = data.len, .mv_data = undefined },
-//     };
+pub fn put_multiple(this: Cursor, comptime T: type, key: []const u8, data: []const T) !usize {
+    var data_actual: [2]c.MDB_val = .{
+        .{ .mv_size = @sizeOf(T), .mv_data = @ptrCast(@constCast(data.ptr)) },
+        .{ .mv_size = data.len, .mv_data = undefined },
+    };
 
-//     var c_key: Val = .from_const(key);
-//     var c_data: Val = .from(std.mem.asBytes(&data_actual));
+    var c_key: Val = .from_const(key);
 
-//     try this.put_impl(c_key.alias(), c_data.alias(), root.all_flags.multiple);
-//     return data_actual[1].mv_size;
-// }
+    try this.put_impl(c_key.alias(), @ptrCast(&data_actual), root.all_flags.multiple);
+    return data_actual[1].mv_size;
+}
 
 fn put_impl(this: Cursor, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags: c_uint) !void {
     switch (root.errno(
@@ -231,7 +260,7 @@ fn put_impl(this: Cursor, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags: c_uint
         .TXN_FULL => return error.TxnFull,
         .KEYEXIST => return error.AlreadyExists,
         _ => |rc| {
-            log.debug("Cursor.put_impl: {t}", .{rc});
+            log.err("Cursor.put_impl: {t}", .{rc});
             unreachable;
         },
 
@@ -239,7 +268,7 @@ fn put_impl(this: Cursor, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags: c_uint
             .ACCES => return error.ReadOnly,
             .INVAL => return error.Invalid,
             else => {
-                log.debug("Cursor.put_impl: {any}", .{rc});
+                log.err("Cursor.put_impl: {any}", .{rc});
                 unreachable;
             },
         },
@@ -275,7 +304,7 @@ fn del_impl(this: Cursor, flags: c_uint) !void {
         .ACCES => error.ReadOnly,
         .INVAL => error.Invalid,
         else => |rc| {
-            log.debug("Cursor.del_impl: {any}", .{rc});
+            log.err("Cursor.del_impl: {any}", .{rc});
             unreachable;
         },
     };
@@ -297,26 +326,34 @@ const Debug = struct {
 
 pub const Kv = struct { []const u8, []const u8 };
 
-pub const GetOp = enum(u5) {
+pub const GetOp = enum(u8) {
     first = c.MDB_FIRST,
     first_dup = c.MDB_FIRST_DUP,
+
     last = c.MDB_LAST,
     last_dup = c.MDB_LAST_DUP,
+
     get_both = c.MDB_GET_BOTH,
     get_both_range = c.MDB_GET_BOTH_RANGE,
     get_current = c.MDB_GET_CURRENT,
-    get_multiple = c.MDB_GET_MULTIPLE,
+
     set = c.MDB_SET,
     set_key = c.MDB_SET_KEY,
     set_range = c.MDB_SET_RANGE,
+
     next = c.MDB_NEXT,
     next_dup = c.MDB_NEXT_DUP,
     next_nodup = c.MDB_NEXT_NODUP,
-    next_multiple = c.MDB_NEXT_MULTIPLE,
+
     prev = c.MDB_PREV,
     prev_dup = c.MDB_PREV_DUP,
     prev_nodup = c.MDB_PREV_NODUP,
-    prev_multiple = c.MDB_PREV_MULTIPLE,
+};
+
+pub const GetMultipleOp = enum(u8) {
+    get = c.MDB_GET_MULTIPLE,
+    next = c.MDB_NEXT_MULTIPLE,
+    prev = c.MDB_PREV_MULTIPLE,
 };
 
 pub const DelFlags = packed struct {
@@ -343,7 +380,11 @@ pub const GetIterator = struct {
             .state = .{ .next_op = next_op },
         };
 
-        this.state.found = cursor.get_impl(init_op, this.c_key.alias(), this.c_data.alias());
+        this.state.found = cursor.get_impl(
+            @intFromEnum(init_op),
+            this.c_key.alias(),
+            this.c_data.alias(),
+        );
         return this;
     }
 
@@ -353,7 +394,7 @@ pub const GetIterator = struct {
         if (this.state.skip) {
             this.state.skip = false;
         } else if (!this.owner.get_impl(
-            this.state.next_op,
+            @intFromEnum(this.state.next_op),
             this.c_key.alias(),
             this.c_data.alias(),
         )) {

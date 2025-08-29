@@ -17,6 +17,20 @@ const Dbi = @This();
 handle: c.MDB_dbi,
 
 pub fn init(txn: Txn, name: ?[:0]const u8, flags: InitFlags) !Dbi {
+    switch (txn.status) {
+        .open => {},
+        .committed => return error.Committed,
+        .aborted => return error.Aborted,
+        else => unreachable,
+    }
+
+    if (utils.DEBUG) {
+        if (txn.debug.access != .read_write and flags.create) {
+            log.err("Dbi.init(..., .{{ .create = true }}) called with read_only Txn", .{});
+            return error.BadAccess;
+        }
+    }
+
     var flags_int: c_uint = 0;
     inline for (std.meta.fields(InitFlags)) |flag| {
         if (@field(flags, flag.name))
@@ -35,12 +49,12 @@ pub fn init(txn: Txn, name: ?[:0]const u8, flags: InitFlags) !Dbi {
         .INCOMPATIBLE => error.Incompatible, // database was dropped and opened with different flags
 
         else => |rc| {
-            log.debug("Dbi.init: {t}", .{rc});
+            log.err("Dbi.init: {t}", .{rc});
             unreachable;
         },
 
         _ => |rc| {
-            log.debug("Dbi.init: {any}", .{rc});
+            log.err("Dbi.init: {any}", .{rc});
             unreachable;
         },
     };
@@ -52,7 +66,7 @@ pub fn get_stats(this: Dbi, txn: Txn) c.MDB_stat {
     return stat;
 }
 
-pub fn get(this: Dbi, txn: Txn, key: []const u8) ?[]u8 {
+pub fn get(this: Dbi, txn: Txn, key: []const u8) !?[]u8 {
     var c_key: Val = .from_const(key);
     var c_out: Val = .empty;
 
@@ -63,22 +77,22 @@ pub fn get(this: Dbi, txn: Txn, key: []const u8) ?[]u8 {
         .NOTFOUND => null,
 
         else => |rc| {
-            log.debug("Dbi.get: {t}", .{rc});
+            log.err("Dbi.get: {t}", .{rc});
             unreachable;
         },
 
         _ => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
-            .INVAL => @panic("Invalid"),
+            .INVAL => return error.Invalid,
 
             else => {
-                log.debug("Dbi.get: {any}", .{rc});
+                log.err("Dbi.get: {any}", .{rc});
                 unreachable;
             },
         },
     };
 }
 
-pub inline fn get_const(this: Dbi, txn: Txn, key: []const u8) ?[]const u8 {
+pub inline fn get_const(this: Dbi, txn: Txn, key: []const u8) !?[]const u8 {
     return this.get(txn, key);
 }
 
@@ -145,6 +159,13 @@ pub fn put_reserve(this: Dbi, txn: Txn, key: []const u8, size: usize) ![]u8 {
 }
 
 fn put_impl(this: Dbi, txn: Txn, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags: c_uint) !void {
+    switch (txn.status) {
+        .open => {},
+        .committed => return error.Committed,
+        .aborted => return error.Aborted,
+        else => unreachable,
+    }
+
     return switch (root.errno(
         c.mdb_put(txn.inner, this.handle, c_key, c_data, flags),
     )) {
@@ -153,7 +174,7 @@ fn put_impl(this: Dbi, txn: Txn, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags:
         .TXN_FULL => error.TxnFull,
         .KEYEXIST => error.AlreadyExists,
         _ => |rc| {
-            log.debug("Dbi.put_impl: {t}", .{rc});
+            log.err("Dbi.put_impl: {t}", .{rc});
             unreachable;
         },
 
@@ -162,22 +183,31 @@ fn put_impl(this: Dbi, txn: Txn, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags:
             .INVAL => error.Invalid,
 
             else => {
-                log.debug("Dbi.put_impl: {any}", .{rc});
+                log.err("Dbi.put_impl: {any}", .{rc});
                 unreachable;
             },
         },
     };
 }
 
-/// note: "NOTFOUND" is not considered an error condition
-pub fn del(this: Dbi, txn: Txn, key: []const u8, data: ?[]const u8) !void {
+/// returns true if deleted, false if not found, error otherwise
+pub fn del(this: Dbi, txn: Txn, key: []const u8, data: ?[]const u8) !bool {
+    switch (txn.status) {
+        .open => {},
+        .committed => return error.Committed,
+        .aborted => return error.Aborted,
+        else => unreachable,
+    }
+
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
     return switch (root.errno(c.mdb_del(txn.inner, this.handle, c_key.alias(), c_data.alias()))) {
-        .NOTFOUND, .SUCCESS => {},
+        .SUCCESS => true,
+        .NOTFOUND => false,
+
         _ => |rc| {
-            log.debug("Dbi.del: {t}", .{rc});
+            log.err("Dbi.del: {t}", .{rc});
             unreachable;
         },
 
@@ -186,7 +216,7 @@ pub fn del(this: Dbi, txn: Txn, key: []const u8, data: ?[]const u8) !void {
             .INVAL => error.Invalid,
 
             else => {
-                log.debug("Dbi.del: {any}", .{rc});
+                log.err("Dbi.del: {any}", .{rc});
                 unreachable;
             },
         },

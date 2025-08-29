@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const log = std.log.scoped(.lmdb);
+
 pub const DEBUG = switch (@import("builtin").mode) {
     .Debug, .ReleaseSafe => true,
     .ReleaseFast, .ReleaseSmall => false,
@@ -12,7 +14,7 @@ pub fn printWithSrc(
 ) void {
     if (@import("builtin").is_test) return;
 
-    std.debug.print("lmdb: " ++ fmt ++ "\n- \x1b[2m[hint: Check {s}.{s}@{s}:{d}:{d}]\x1b[m\n", args ++ .{
+    log.err(fmt ++ " | hint: {s}.{s} in {s}:{d}:{d}", args ++ .{
         src.module,
         src.fn_name,
         src.file,

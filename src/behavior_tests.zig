@@ -178,7 +178,7 @@ test "put_or_get + del" {
         try std.testing.expectEqualStrings("data2", try dbi.put_get(txn, "key2", "data2"));
         try std.testing.expectEqualStrings("data3", try dbi.put_get(txn, "key3", "data3"));
         try std.testing.expectEqualStrings("data3", try dbi.put_get(txn, "key3", "litter"));
-        try dbi.del(txn, "key3", null);
+        try std.testing.expect(try dbi.del(txn, "key3", null));
 
         try txn.commit();
     }
@@ -202,41 +202,67 @@ test "put_or_get + del" {
     try std.testing.expect(iter.next() == null);
 }
 
-// This test fails because of a seg fault
-// i suspect it has to do with lmdb's extensive use of UB
-// test "cursor put multiple" {
-//     const env, const dbi = try create_env("put-multi", .{ .dup_sort = true, .dup_fixed = true });
-//     defer env.deinit();
+test "cursor put get multiple" {
+    var rng: std.Random.Xoroshiro128 = .init(std.testing.random_seed);
 
-//     {
-//         var txn = try env.begin(@src(), .read_write, .{});
-//         defer txn.abort();
+    const env, const dbi = try create_env("put-multi", .{ .dup_sort = true, .dup_fixed = true });
+    defer env.deinit();
 
-//         const cursor = try dbi.cursor(@src(), txn);
-//         defer cursor.deinit();
+    // 8KiB
+    const Data = u128;
+    var data: [512]Data = undefined;
+    rng.fill(std.mem.sliceAsBytes(&data));
 
-//         const appended = try cursor.put_multiple(u16, "\x00", &.{ 0x1234, 0x2345, 0x3456, 0x4567, 0x5678 });
-//         try std.testing.expectEqual(5, appended);
+    {
+        var txn = try env.begin(@src(), .read_write, .{});
+        defer txn.abort();
 
-//         try txn.commit();
-//     }
+        const cursor = try dbi.cursor(@src(), &txn);
+        defer cursor.deinit();
 
-//     var txn = try env.begin(@src(), .read_only, .{});
-//     defer txn.abort();
+        const appended = try cursor.put_multiple(Data, "data", &data);
+        try std.testing.expectEqual(data.len, appended);
 
-//     const cursor = try dbi.cursor(@src(), txn);
-//     defer cursor.deinit();
+        try txn.commit();
+    }
 
-//     var iter = cursor.get_iter(.first_dup, "\x00", null, .next_dup);
+    const SortCtx = struct {
+        pub fn lessThan(_: @This(), a: Data, b: Data) bool {
+            return std.mem.nativeToBig(Data, a) < std.mem.nativeToBig(Data, b);
+        }
+    };
+    std.mem.sort(Data, &data, SortCtx{}, SortCtx.lessThan);
 
-//     try std.testing.expectEqual(std.mem.bytesToValue(u16, iter.next().?[1]), 0x1234);
-//     try std.testing.expectEqual(std.mem.bytesToValue(u16, iter.next().?[1]), 0x2345);
-//     try std.testing.expectEqual(std.mem.bytesToValue(u16, iter.next().?[1]), 0x3456);
-//     try std.testing.expectEqual(std.mem.bytesToValue(u16, iter.next().?[1]), 0x4567);
-//     try std.testing.expectEqual(std.mem.bytesToValue(u16, iter.next().?[1]), 0x5678);
+    var txn = try env.begin(@src(), .read_only, .{});
+    defer txn.abort();
 
-//     try std.testing.expect(iter.next() == null);
-// }
+    const cursor = try dbi.cursor(@src(), &txn);
+    defer cursor.deinit();
+
+    // get_multiple
+
+    var head: usize = 0;
+    _ = cursor.get(.set, "data", null);
+
+    while (cursor.get_multiple(Data, .next, null)) |page| {
+        defer head += page.len;
+
+        for (data[head..][0..page.len], page) |e, a|
+            try std.testing.expectEqual(e, a);
+    }
+
+    // iter
+
+    head = 0;
+    var iter = cursor.get_iter(.set, "data", null, .next_dup);
+
+    while (iter.next()) |kv| : (head += 1) {
+        _, const v = kv;
+
+        const vd = std.mem.bytesToValue(Data, v);
+        try std.testing.expectEqual(data[head], vd);
+    }
+}
 
 test "put_append" {
     const SortContext = struct {
@@ -363,7 +389,7 @@ test "put_reserve" {
     var txn = try env.begin(@src(), .read_only, .{});
     defer txn.abort();
 
-    const v = dbi.get_const(txn, "key0") orelse return error.NotFound;
+    const v = try dbi.get_const(txn, "key0") orelse return error.NotFound;
     try std.testing.expectEqualSlices(u8, &data, v);
 }
 
@@ -417,7 +443,7 @@ test "empty_contents" {
 
         try std.testing.expectEqualStrings(
             "world",
-            dbi.get(txn, "hello").?,
+            (try dbi.get(txn, "hello")).?,
         );
     }
 
@@ -433,12 +459,12 @@ test "empty_contents" {
         var txn = try env.begin(@src(), .read_only, .{});
         defer txn.abort();
 
-        try std.testing.expect(dbi.get(txn, "hello") == null);
+        try std.testing.expect(try dbi.get(txn, "hello") == null);
     }
 }
 
 test "Debug safety" {
-    if (@import("builtin").mode != .Debug) return error.SkipZigTest;
+    if (!@import("utils.zig").DEBUG) return error.SkipZigTest;
 
     const env, const dbi = try create_env("debug-safety", .{});
     defer env.deinit();
@@ -447,7 +473,7 @@ test "Debug safety" {
     {
         var txn = try env.begin(@src(), .read_write, .{});
         txn.abort();
-        try std.testing.expectError(error.Invalid, txn.commit());
+        try std.testing.expectError(error.Aborted, txn.commit());
     }
 
     // txn bad access
@@ -455,7 +481,7 @@ test "Debug safety" {
         var txn = try env.begin(@src(), .read_write, .{});
         defer txn.abort();
 
-        try std.testing.expectError(error.BadAccess, txn.reset_renew());
+        try std.testing.expectError(error.BadAccess, txn.reset());
     }
 
     // txn has children
@@ -467,7 +493,6 @@ test "Debug safety" {
         defer child_txn.abort();
 
         try std.testing.expectError(error.TxnHasChildren, txn.cursor(@src(), dbi));
-        try std.testing.expectError(error.TxnHasChildren, txn.reset_renew());
     }
 
     // cursor bad access

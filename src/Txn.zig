@@ -12,16 +12,13 @@ const Env = @import("Env.zig");
 
 const log = std.log.scoped(.lmdb);
 
-// TODO: make Txn and Cursor generic with comptime known access mode, replace BadAccess w/ compile error
-
 const Txn = @This();
 
 inner: *c.MDB_txn,
-done: bool = false,
+status: Status = .open,
 debug: if (utils.DEBUG) Debug else void,
 
 /// Create new transaction - See `Env.begin*(...)`
-/// Only one read_only txn per thread is allowed
 pub fn init(
     env: Env,
     src: std.builtin.SourceLocation,
@@ -29,7 +26,7 @@ pub fn init(
     access: Access,
     flags: InitFlags,
 ) !Txn {
-    if (parent) |ptxn| std.debug.assert(!ptxn.done);
+    if (parent) |ptxn| std.debug.assert(ptxn.status == .open);
 
     var flags_int: c_uint = 0;
     inline for (std.meta.fields(InitFlags)) |flag| {
@@ -39,17 +36,30 @@ pub fn init(
     if (access == .read_only) flags_int |= root.all_flags.read_only;
 
     var maybe_txn: ?*c.MDB_txn = null;
-    switch (root.errno(c.mdb_txn_begin(
+    return switch (root.errno(c.mdb_txn_begin(
         env.inner,
         if (parent) |ptxn| ptxn.inner else null,
         flags_int,
         &maybe_txn,
     ))) {
-        .SUCCESS => {},
-        .PANIC => return error.Panic,
-        .BAD_TXN => return error.BadParent,
-        .MAP_RESIZED => return error.MapResized,
-        .READERS_FULL => return error.ReadersFull,
+        .SUCCESS => {
+            if (utils.DEBUG) {
+                if (parent) |ptxn| ptxn.debug.children += 1;
+            }
+
+            return .{
+                .inner = maybe_txn.?,
+                .debug = if (utils.DEBUG) .{
+                    .src = src,
+                    .parent = parent,
+                    .access = access,
+                },
+            };
+        },
+        .PANIC => error.Panic,
+        .BAD_TXN => error.BadParent,
+        .MAP_RESIZED => error.MapResized,
+        .READERS_FULL => error.ReadersFull,
 
         _ => |rc| {
             log.debug("Txn.init: {t}", .{rc});
@@ -57,48 +67,53 @@ pub fn init(
         },
 
         else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
-            .NOMEM => return error.OutOfMemory,
-            .INVAL => return error.BlockedByReadOnlyTxn,
+            // If NO_TLS isnt set on the Env then only one read only txn per thread is allowed
+            .INVAL => error.BlockedByReadOnlyTxn,
+            .NOMEM => error.OutOfMemory,
 
             else => {
                 log.debug("Txn.init: {any}", .{rc});
                 unreachable;
             },
         },
-    }
-
-    if (utils.DEBUG) {
-        if (parent) |ptxn| ptxn.debug.children += 1;
-    }
-
-    return .{
-        .inner = maybe_txn.?,
-        .debug = if (utils.DEBUG) .{
-            .access = access,
-            .src = src,
-            .parent = parent,
-        },
     };
 }
 
 /// Commit transaction's changes to db
+/// Sets `status` to `.committed` on success and `.invalid` if `error.Invalid` is returned.
 pub fn commit(this: *Txn) !void {
-    if (this.done) {
-        if (utils.DEBUG)
-            utils.printWithSrc(this.debug.src, "commit() called on {*} while already committed or aborted", .{this});
-        return error.Invalid;
+    switch (this.status) {
+        .open => {},
+        .committed => return error.Committed,
+        .aborted => return error.Aborted,
+        else => unreachable,
     }
 
     if (utils.DEBUG) {
-        if (this.debug.parent) |ptxn| ptxn.debug.children -= 1;
+        if (this.debug.access == .read_only) {
+            utils.printWithSrc(
+                this.debug.src,
+                "commit() called on {t} {*}",
+                .{ this.debug.access, this },
+            );
+            return error.BadAccess;
+        }
     }
 
-    defer this.done = true;
     return switch (@as(std.posix.E, @enumFromInt(
         c.mdb_txn_commit(this.inner),
     ))) {
-        .SUCCESS => {},
-        .INVAL => error.Invalid,
+        .SUCCESS => {
+            this.status = .committed;
+
+            if (utils.DEBUG) {
+                if (this.debug.parent) |ptxn| ptxn.debug.children -= 1;
+            }
+        },
+        .INVAL => {
+            this.status = .invalid;
+            return error.Invalid;
+        },
         .NOSPC => error.NoSpaceLeft,
         .NOMEM => error.OutOfMemory,
         .IO => error.IoError,
@@ -111,34 +126,71 @@ pub fn commit(this: *Txn) !void {
 }
 
 /// Abandon all changes made by this transaction
+/// Sets `status` to `.aborted`
 pub fn abort(this: *Txn) void {
-    if (this.done) return;
+    switch (this.status) {
+        .open, .reset => {},
+        else => return,
+    }
 
     if (utils.DEBUG) {
         if (this.debug.parent) |ptxn| ptxn.debug.children -= 1;
     }
 
-    defer this.done = true;
+    defer this.status = .aborted;
     c.mdb_txn_abort(this.inner);
 }
 
-/// reset() then renew() a *read-only* transaction (optimization)
-pub fn reset_renew(this: *Txn) !void {
-    if (utils.DEBUG) {
-        if (this.debug.children > 0) {
-            utils.printWithSrc(this.debug.src, "reset_renew() called on {*} with {d} children", .{ this, this.debug.children });
-            return error.TxnHasChildren;
-        } else if (this.debug.access != .read_only) {
-            utils.printWithSrc(this.debug.src, "reset_renew() called on read_write {*}", .{this});
-            return error.BadAccess;
-        }
+/// Reset a read only txn (to later `renew()`)
+/// Sets `status` to `.reset`
+pub fn reset(this: *Txn) !void {
+    switch (this.status) {
+        .open, .aborted => {},
+        .reset => return,
+        else => unreachable,
     }
 
+    if (utils.DEBUG) {
+        if (this.debug.access != .read_only) {
+            utils.printWithSrc(
+                this.debug.src,
+                "reset() called on {t} {*}",
+                .{ this.debug.access, this },
+            );
+            return error.BadAccess;
+        }
+
+        if (this.debug.children > 0) {
+            utils.printWithSrc(
+                this.debug.src,
+                "reset() called on {t} {*} with {d} children",
+                .{ this.status, this, this.debug.children },
+            );
+            return error.TxnHasChildren;
+        }
+
+        this.debug.parent = null; // TODO: docs dont mention if this happens or not
+    }
+
+    defer this.status = .reset;
     c.mdb_txn_reset(this.inner);
+}
+
+/// Renew a reset read only txn
+pub fn renew(this: *Txn) !void {
+    switch (this.status) {
+        .reset => {},
+        else => unreachable,
+    }
+
+    if (utils.DEBUG) std.debug.assert(this.debug.access == .read_only);
 
     switch (root.errno(c.mdb_txn_renew(this.inner))) {
-        .SUCCESS => this.done = false,
-        else => return error.RenewFailed,
+        .SUCCESS => this.status = .open,
+        else => {
+            this.status = .invalid;
+            return error.Failed;
+        },
     }
 }
 
@@ -147,7 +199,7 @@ pub inline fn get(this: Txn, dbi: Dbi, key: []const u8) ?[]u8 {
 }
 
 pub inline fn get_const(this: Txn, dbi: Dbi, key: []const u8) ?[]const u8 {
-    return this.get(dbi, key);
+    return dbi.get_const(this, key);
 }
 
 pub inline fn put(this: Txn, dbi: Dbi, key: []const u8, data: []const u8) !void {
@@ -193,15 +245,24 @@ pub inline fn cursor(txn: *const Txn, src: std.builtin.SourceLocation, dbi: Dbi)
 }
 
 const Debug = struct {
-    access: Txn.Access,
     src: std.builtin.SourceLocation,
-    parent: ?*Txn,
+    access: Access,
+
     children: usize = 0,
+    parent: ?*Txn = null,
 };
 
 pub const Access = enum {
     read_only,
     read_write,
+};
+
+pub const Status = enum {
+    invalid,
+    open,
+    committed,
+    aborted,
+    reset,
 };
 
 pub const InitFlags = packed struct {
