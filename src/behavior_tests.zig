@@ -202,11 +202,16 @@ test "put_or_get + del" {
     try std.testing.expect(iter.next() == null);
 }
 
-test "cursor put multiple" {
+test "cursor put get multiple" {
+    var rng: std.Random.Xoroshiro128 = .init(std.testing.random_seed);
+
     const env, const dbi = try create_env("put-multi", .{ .dup_sort = true, .dup_fixed = true });
     defer env.deinit();
 
-    const DATA = [_]u16{ 0x1234, 0x2345, 0x3456, 0x4567, 0x5678 };
+    // 8KiB
+    const Data = u128;
+    var data: [512]Data = undefined;
+    rng.fill(std.mem.sliceAsBytes(&data));
 
     {
         var txn = try env.begin(@src(), .read_write, .{});
@@ -215,11 +220,18 @@ test "cursor put multiple" {
         const cursor = try dbi.cursor(@src(), &txn);
         defer cursor.deinit();
 
-        const appended = try cursor.put_multiple(u16, "\x00", &DATA);
-        try std.testing.expectEqual(5, appended);
+        const appended = try cursor.put_multiple(Data, "data", &data);
+        try std.testing.expectEqual(data.len, appended);
 
         try txn.commit();
     }
+
+    const SortCtx = struct {
+        pub fn lessThan(_: @This(), a: Data, b: Data) bool {
+            return std.mem.nativeToBig(Data, a) < std.mem.nativeToBig(Data, b);
+        }
+    };
+    std.mem.sort(Data, &data, SortCtx{}, SortCtx.lessThan);
 
     var txn = try env.begin(@src(), .read_only, .{});
     defer txn.abort();
@@ -227,11 +239,28 @@ test "cursor put multiple" {
     const cursor = try dbi.cursor(@src(), &txn);
     defer cursor.deinit();
 
-    _ = cursor.get(.set, "\x00", null);
-    const ret = cursor.get_multiple(u16, .next, null) orelse return error.NotFound;
+    // get_multiple
 
-    for (&DATA, ret) |e, a| {
-        if (a != e) return error.TestExpectedEqual;
+    var head: usize = 0;
+    _ = cursor.get(.set, "data", null);
+
+    while (cursor.get_multiple(Data, .next, null)) |page| {
+        defer head += page.len;
+
+        for (data[head..][0..page.len], page) |e, a|
+            try std.testing.expectEqual(e, a);
+    }
+
+    // iter
+
+    head = 0;
+    var iter = cursor.get_iter(.set, "data", null, .next_dup);
+
+    while (iter.next()) |kv| : (head += 1) {
+        _, const v = kv;
+
+        const vd = std.mem.bytesToValue(Data, v);
+        try std.testing.expectEqual(data[head], vd);
     }
 }
 
