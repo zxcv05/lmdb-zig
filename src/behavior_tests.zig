@@ -178,7 +178,7 @@ test "put_or_get + del" {
         try std.testing.expectEqualStrings("data2", try dbi.put_get(txn, "key2", "data2"));
         try std.testing.expectEqualStrings("data3", try dbi.put_get(txn, "key3", "data3"));
         try std.testing.expectEqualStrings("data3", try dbi.put_get(txn, "key3", "litter"));
-        try dbi.del(txn, "key3", null);
+        try std.testing.expect(try dbi.del(txn, "key3", null));
 
         try txn.commit();
     }
@@ -202,41 +202,38 @@ test "put_or_get + del" {
     try std.testing.expect(iter.next() == null);
 }
 
-// This test fails because of a seg fault
-// i suspect it has to do with lmdb's extensive use of UB
-// test "cursor put multiple" {
-//     const env, const dbi = try create_env("put-multi", .{ .dup_sort = true, .dup_fixed = true });
-//     defer env.deinit();
+test "cursor put multiple" {
+    const env, const dbi = try create_env("put-multi", .{ .dup_sort = true, .dup_fixed = true });
+    defer env.deinit();
 
-//     {
-//         var txn = try env.begin(@src(), .read_write, .{});
-//         defer txn.abort();
+    const DATA = [_]u16{ 0x1234, 0x2345, 0x3456, 0x4567, 0x5678 };
 
-//         const cursor = try dbi.cursor(@src(), txn);
-//         defer cursor.deinit();
+    {
+        var txn = try env.begin(@src(), .read_write, .{});
+        defer txn.abort();
 
-//         const appended = try cursor.put_multiple(u16, "\x00", &.{ 0x1234, 0x2345, 0x3456, 0x4567, 0x5678 });
-//         try std.testing.expectEqual(5, appended);
+        const cursor = try dbi.cursor(@src(), &txn);
+        defer cursor.deinit();
 
-//         try txn.commit();
-//     }
+        const appended = try cursor.put_multiple(u16, "\x00", &DATA);
+        try std.testing.expectEqual(5, appended);
 
-//     var txn = try env.begin(@src(), .read_only, .{});
-//     defer txn.abort();
+        try txn.commit();
+    }
 
-//     const cursor = try dbi.cursor(@src(), txn);
-//     defer cursor.deinit();
+    var txn = try env.begin(@src(), .read_only, .{});
+    defer txn.abort();
 
-//     var iter = cursor.get_iter(.first_dup, "\x00", null, .next_dup);
+    const cursor = try dbi.cursor(@src(), &txn);
+    defer cursor.deinit();
 
-//     try std.testing.expectEqual(std.mem.bytesToValue(u16, iter.next().?[1]), 0x1234);
-//     try std.testing.expectEqual(std.mem.bytesToValue(u16, iter.next().?[1]), 0x2345);
-//     try std.testing.expectEqual(std.mem.bytesToValue(u16, iter.next().?[1]), 0x3456);
-//     try std.testing.expectEqual(std.mem.bytesToValue(u16, iter.next().?[1]), 0x4567);
-//     try std.testing.expectEqual(std.mem.bytesToValue(u16, iter.next().?[1]), 0x5678);
+    _ = cursor.get(.set, "\x00", null);
+    const ret = cursor.get_multiple(u16, .next, null) orelse return error.NotFound;
 
-//     try std.testing.expect(iter.next() == null);
-// }
+    for (&DATA, ret) |e, a| {
+        if (a != e) return error.TestExpectedEqual;
+    }
+}
 
 test "put_append" {
     const SortContext = struct {
@@ -363,7 +360,7 @@ test "put_reserve" {
     var txn = try env.begin(@src(), .read_only, .{});
     defer txn.abort();
 
-    const v = dbi.get_const(txn, "key0") orelse return error.NotFound;
+    const v = try dbi.get_const(txn, "key0") orelse return error.NotFound;
     try std.testing.expectEqualSlices(u8, &data, v);
 }
 
@@ -417,7 +414,7 @@ test "empty_contents" {
 
         try std.testing.expectEqualStrings(
             "world",
-            dbi.get(txn, "hello").?,
+            (try dbi.get(txn, "hello")).?,
         );
     }
 
@@ -433,12 +430,12 @@ test "empty_contents" {
         var txn = try env.begin(@src(), .read_only, .{});
         defer txn.abort();
 
-        try std.testing.expect(dbi.get(txn, "hello") == null);
+        try std.testing.expect(try dbi.get(txn, "hello") == null);
     }
 }
 
 test "Debug safety" {
-    if (@import("builtin").mode != .Debug) return error.SkipZigTest;
+    if (!@import("utils.zig").DEBUG) return error.SkipZigTest;
 
     const env, const dbi = try create_env("debug-safety", .{});
     defer env.deinit();
@@ -447,7 +444,7 @@ test "Debug safety" {
     {
         var txn = try env.begin(@src(), .read_write, .{});
         txn.abort();
-        try std.testing.expectError(error.Invalid, txn.commit());
+        try std.testing.expectError(error.Aborted, txn.commit());
     }
 
     // txn bad access
@@ -455,7 +452,7 @@ test "Debug safety" {
         var txn = try env.begin(@src(), .read_write, .{});
         defer txn.abort();
 
-        try std.testing.expectError(error.BadAccess, txn.reset_renew());
+        try std.testing.expectError(error.BadAccess, txn.reset());
     }
 
     // txn has children
@@ -467,7 +464,6 @@ test "Debug safety" {
         defer child_txn.abort();
 
         try std.testing.expectError(error.TxnHasChildren, txn.cursor(@src(), dbi));
-        try std.testing.expectError(error.TxnHasChildren, txn.reset_renew());
     }
 
     // cursor bad access
