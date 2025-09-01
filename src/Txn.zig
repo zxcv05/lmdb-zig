@@ -235,8 +235,8 @@ pub inline fn put_reserve(this: Txn, dbi: Dbi, key: []const u8, size: usize) ![]
     return dbi.put_reserve(this, key, size);
 }
 
-/// note: "NOTFOUND" is not considered an error condition
-pub inline fn del(this: Txn, dbi: Dbi, key: []const u8, data: ?[]const u8) !void {
+/// returns true if deleted, false if not found, error otherwise
+pub inline fn del(this: Txn, dbi: Dbi, key: []const u8, data: ?[]const u8) !bool {
     return dbi.del(this, key, data);
 }
 
