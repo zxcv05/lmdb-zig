@@ -194,11 +194,11 @@ pub fn renew(this: *Txn) !void {
     }
 }
 
-pub inline fn get(this: Txn, dbi: Dbi, key: []const u8) ?[]u8 {
+pub inline fn get(this: Txn, dbi: Dbi, key: []const u8) !?[]u8 {
     return dbi.get(this, key);
 }
 
-pub inline fn get_const(this: Txn, dbi: Dbi, key: []const u8) ?[]const u8 {
+pub inline fn get_const(this: Txn, dbi: Dbi, key: []const u8) !?[]const u8 {
     return dbi.get_const(this, key);
 }
 
