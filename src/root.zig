@@ -6,6 +6,8 @@ pub const Dbi = @import("Dbi.zig");
 pub const Env = @import("Env.zig");
 pub const Txn = @import("Txn.zig");
 
+const log = std.log.scoped(.lmdb);
+
 // zig fmt: off
 pub const E = enum(c_int) {
     SUCCESS = c.MDB_SUCCESS,
@@ -76,16 +78,27 @@ pub fn errno(rc: anytype) E {
     return @enumFromInt(rc);
 }
 
+pub fn lmdbUnhandledError(src: std.builtin.SourceLocation, rc: anytype) !void {
+    const PANIC_ON_UNHANDLED_ERROR = false;
+
+    log.err("{s}: Unhandled error: {any}", .{ src.fn_name, rc });
+    if (PANIC_ON_UNHANDLED_ERROR) @panic("trap: unhandled error");
+    return error.UnknownError;
+}
+
 test {
     try std.testing.expectEqual(
         @intFromEnum(std.posix.E.SUCCESS),
         @intFromEnum(E.SUCCESS),
     );
 
+    // TODO: this hack only works because the test runner is single threaded.
+    //       will need to revisit if/when that changes
     std.fs.cwd().makeDir("testdb") catch {};
     std.fs.cwd().deleteFile("testdb/data.mdb") catch {};
     std.fs.cwd().deleteFile("testdb/lock.mdb") catch {};
 
     std.testing.refAllDeclsRecursive(@This());
+    std.testing.refAllDeclsRecursive(@import("Val.zig"));
     std.testing.refAllDecls(@import("behavior_tests.zig"));
 }

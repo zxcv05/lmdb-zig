@@ -48,14 +48,14 @@ pub fn init(src: std.builtin.SourceLocation, dbi: Dbi, txn: *const Txn) !Cursor 
             },
         },
         else => |rc| {
-            log.err("Cursor.init: {any}", .{rc});
+            try root.lmdbUnhandledError(@src(), rc);
             unreachable;
         },
     }
 }
 
 /// Please see top-level comment for usage information
-pub fn deinit(this: *const Cursor) void {
+pub fn deinit(this: Cursor) void {
     if (utils.DEBUG) {
         switch (this.debug.owner.status) {
             .open, .reset => {},
@@ -90,7 +90,7 @@ pub fn renew(this: *Cursor, txn: *const Txn) !void {
 
 /// Warning: Errors will be treated as "Not found" and will return null
 /// Make sure if doing DUPSORT operations that the dbi is actually DUPSORT
-pub fn get(this: *const Cursor, op: GetOp, key: ?[]const u8, data: ?[]const u8) ?Kv {
+pub fn get(this: Cursor, op: GetOp, key: ?[]const u8, data: ?[]const u8) ?Kv {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
@@ -105,7 +105,7 @@ pub fn get(this: *const Cursor, op: GetOp, key: ?[]const u8, data: ?[]const u8) 
 
 /// Warning: Errors will be treated as "Not found" and will return null
 pub fn get_multiple(
-    this: *const Cursor,
+    this: Cursor,
     comptime T: type,
     op: GetMultipleOp,
     key: ?[]const u8,
@@ -129,7 +129,7 @@ fn get_impl(this: Cursor, op: c_uint, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val) b
 
 pub const get_iter = GetIterator.init;
 
-pub fn put(this: *Cursor, key: []const u8, data: []const u8) !void {
+pub fn put(this: Cursor, key: []const u8, data: []const u8) !void {
     if (utils.DEBUG and this.debug.access != .read_write) {
         utils.printWithSrc(this.debug.src, "put() called on read_only {*}", .{this});
         return error.BadAccess;
@@ -143,7 +143,7 @@ pub fn put(this: *Cursor, key: []const u8, data: []const u8) !void {
 
 /// `put()` with `current` flag
 /// key must match item at the current cursor position
-pub fn put_replace(this: *Cursor, key: []const u8, data: []const u8) !void {
+pub fn put_replace(this: Cursor, key: []const u8, data: []const u8) !void {
     if (utils.DEBUG and this.debug.access != .read_write) {
         utils.printWithSrc(this.debug.src, "put_replace() called on read_only {*}", .{this});
         return error.BadAccess;
@@ -157,7 +157,7 @@ pub fn put_replace(this: *Cursor, key: []const u8, data: []const u8) !void {
 
 /// `put()` with `no_dup_data` flag
 /// supported for DUPSORT databases
-pub fn put_no_clobber(this: *Cursor, key: []const u8, data: []const u8) !void {
+pub fn put_no_clobber(this: Cursor, key: []const u8, data: []const u8) !void {
     if (utils.DEBUG and this.debug.access != .read_write) {
         utils.printWithSrc(this.debug.src, "put_no_clobber() called on read_only {*}", .{this});
         return error.BadAccess;
@@ -171,7 +171,7 @@ pub fn put_no_clobber(this: *Cursor, key: []const u8, data: []const u8) !void {
 
 /// `put()` with `no_overwrite` flag
 /// will put data (if not existing) or return it (if existing)
-pub fn put_get(this: *Cursor, key: []const u8, data: []const u8) ![]u8 {
+pub fn put_get(this: Cursor, key: []const u8, data: []const u8) ![]u8 {
     if (utils.DEBUG and this.debug.access != .read_write) {
         utils.printWithSrc(this.debug.src, "put_get() called on read_only {*}", .{this});
         return error.BadAccess;
@@ -190,7 +190,7 @@ pub fn put_get(this: *Cursor, key: []const u8, data: []const u8) ![]u8 {
 
 /// `put()` with `append` flag
 /// must be sorted
-pub fn put_append(this: *Cursor, key: []const u8, data: []const u8) !void {
+pub fn put_append(this: Cursor, key: []const u8, data: []const u8) !void {
     if (utils.DEBUG and this.debug.access != .read_write) {
         utils.printWithSrc(this.debug.src, "put_append() called on read_only {*}", .{this});
         return error.BadAccess;
@@ -207,7 +207,7 @@ pub fn put_append(this: *Cursor, key: []const u8, data: []const u8) !void {
 
 /// `put()` with `append_dup` flag
 /// supported for DUPSORT databases
-pub fn put_append_dup(this: *Cursor, key: []const u8, data: []const u8) !void {
+pub fn put_append_dup(this: Cursor, key: []const u8, data: []const u8) !void {
     if (utils.DEBUG and this.debug.access != .read_write) {
         utils.printWithSrc(this.debug.src, "put_append_dup() called on read_only {*}", .{this});
         return error.BadAccess;
@@ -224,7 +224,7 @@ pub fn put_append_dup(this: *Cursor, key: []const u8, data: []const u8) !void {
 
 /// `put()` with `reserve` flag
 /// NOT supported for DUPSORT databased
-pub fn put_reserve(this: *Cursor, key: []const u8, size: usize) ![]u8 {
+pub fn put_reserve(this: Cursor, key: []const u8, size: usize) ![]u8 {
     if (utils.DEBUG and this.debug.access != .read_write) {
         utils.printWithSrc(this.debug.src, "put_reserve() called on read_only {*}", .{this});
         return error.BadAccess;
@@ -252,31 +252,28 @@ pub fn put_multiple(this: Cursor, comptime T: type, key: []const u8, data: []con
 }
 
 fn put_impl(this: Cursor, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags: c_uint) !void {
-    switch (root.errno(
+    return switch (root.errno(
         c.mdb_cursor_put(this.inner, c_key, c_data, flags),
     )) {
         .SUCCESS => {},
-        .MAP_FULL => return error.MapFull,
-        .TXN_FULL => return error.TxnFull,
-        .KEYEXIST => return error.AlreadyExists,
-        _ => |rc| {
-            log.err("Cursor.put_impl: {t}", .{rc});
-            unreachable;
-        },
+        .MAP_FULL => error.MapFull,
+        .TXN_FULL => error.TxnFull,
+        .KEYEXIST => error.AlreadyExists,
+        .INCOMPATIBLE => error.Incompatible,
+
+        _ => |rc| root.lmdbUnhandledError(@src(), rc),
 
         else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
-            .ACCES => return error.ReadOnly,
-            .INVAL => return error.Invalid,
-            else => {
-                log.err("Cursor.put_impl: {any}", .{rc});
-                unreachable;
-            },
+            .ACCES => error.ReadOnly,
+            .INVAL => error.Invalid,
+
+            else => root.lmdbUnhandledError(@src(), rc),
         },
-    }
+    };
 }
 
 /// Delete current key/data pair
-pub fn del(this: *Cursor) !void {
+pub fn del(this: Cursor) !void {
     if (utils.DEBUG and this.debug.access != .read_write) {
         utils.printWithSrc(this.debug.src, "del() called on read_only {*}", .{this});
         return error.BadAccess;
@@ -287,7 +284,7 @@ pub fn del(this: *Cursor) !void {
 
 /// Delete all items for current key
 /// supported for DUPSORT databases
-pub fn del_all(this: *Cursor) !void {
+pub fn del_all(this: Cursor) !void {
     if (utils.DEBUG and this.debug.access != .read_write) {
         utils.printWithSrc(this.debug.src, "del_all() called on read_only {*}", .{this});
         return error.BadAccess;
@@ -303,16 +300,14 @@ fn del_impl(this: Cursor, flags: c_uint) !void {
         .SUCCESS => {},
         .ACCES => error.ReadOnly,
         .INVAL => error.Invalid,
-        else => |rc| {
-            log.err("Cursor.del_impl: {any}", .{rc});
-            unreachable;
-        },
+
+        else => |rc| root.lmdbUnhandledError(@src(), rc),
     };
 }
 
 /// errors treated as null
 /// supported for DUPSORT databases
-pub fn count(this: *const Cursor) ?usize {
+pub fn count(this: Cursor) ?usize {
     var ret: c_ulong = 0;
     if (c.mdb_cursor_count(this.inner, &ret) != @intFromEnum(root.E.SUCCESS)) return null;
     return @intCast(ret);

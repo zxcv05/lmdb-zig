@@ -62,7 +62,7 @@ pub fn init(
         .READERS_FULL => error.ReadersFull,
 
         _ => |rc| {
-            log.debug("Txn.init: {t}", .{rc});
+            try root.lmdbUnhandledError(@src(), rc);
             unreachable;
         },
 
@@ -72,7 +72,7 @@ pub fn init(
             .NOMEM => error.OutOfMemory,
 
             else => {
-                log.debug("Txn.init: {any}", .{rc});
+                try root.lmdbUnhandledError(@src(), rc);
                 unreachable;
             },
         },
@@ -119,7 +119,7 @@ pub fn commit(this: *Txn) !void {
         .IO => error.IoError,
 
         else => |rc| {
-            log.debug("Txn.commit: {any}", .{rc});
+            try root.lmdbUnhandledError(@src(), rc);
             unreachable;
         },
     };

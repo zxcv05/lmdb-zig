@@ -49,12 +49,7 @@ pub fn init(txn: Txn, name: ?[:0]const u8, flags: InitFlags) !Dbi {
         .INCOMPATIBLE => error.Incompatible, // database was dropped and opened with different flags
 
         else => |rc| {
-            log.err("Dbi.init: {t}", .{rc});
-            unreachable;
-        },
-
-        _ => |rc| {
-            log.err("Dbi.init: {any}", .{rc});
+            try root.lmdbUnhandledError(@src(), rc);
             unreachable;
         },
     };
@@ -76,16 +71,16 @@ pub fn get(this: Dbi, txn: Txn, key: []const u8) !?[]u8 {
         .SUCCESS => c_out.unalias(),
         .NOTFOUND => null,
 
-        else => |rc| {
-            log.err("Dbi.get: {t}", .{rc});
+        _ => |rc| {
+            try root.lmdbUnhandledError(@src(), rc);
             unreachable;
         },
 
-        _ => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+        else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
             .INVAL => return error.Invalid,
 
             else => {
-                log.err("Dbi.get: {any}", .{rc});
+                try root.lmdbUnhandledError(@src(), rc);
                 unreachable;
             },
         },
@@ -125,7 +120,7 @@ pub fn put_get(this: Dbi, txn: Txn, key: []const u8, data: []const u8) ![]u8 {
 }
 
 /// `put()` with `append` flag
-/// must be sorted
+/// keys must be sorted
 pub fn put_append(this: Dbi, txn: Txn, key: []const u8, data: []const u8) !void {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
@@ -173,8 +168,9 @@ fn put_impl(this: Dbi, txn: Txn, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags:
         .MAP_FULL => error.MapFull,
         .TXN_FULL => error.TxnFull,
         .KEYEXIST => error.AlreadyExists,
+
         _ => |rc| {
-            log.err("Dbi.put_impl: {t}", .{rc});
+            try root.lmdbUnhandledError(@src(), rc);
             unreachable;
         },
 
@@ -183,7 +179,7 @@ fn put_impl(this: Dbi, txn: Txn, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags:
             .INVAL => error.Invalid,
 
             else => {
-                log.err("Dbi.put_impl: {any}", .{rc});
+                try root.lmdbUnhandledError(@src(), rc);
                 unreachable;
             },
         },
@@ -207,7 +203,7 @@ pub fn del(this: Dbi, txn: Txn, key: []const u8, data: ?[]const u8) !bool {
         .NOTFOUND => false,
 
         _ => |rc| {
-            log.err("Dbi.del: {t}", .{rc});
+            try root.lmdbUnhandledError(@src(), rc);
             unreachable;
         },
 
@@ -216,7 +212,7 @@ pub fn del(this: Dbi, txn: Txn, key: []const u8, data: ?[]const u8) !bool {
             .INVAL => error.Invalid,
 
             else => {
-                log.err("Dbi.del: {any}", .{rc});
+                try root.lmdbUnhandledError(@src(), rc);
                 unreachable;
             },
         },

@@ -3,513 +3,593 @@ const lib = @import("root.zig");
 
 const c = @import("c");
 
-fn create_env(db_name: ?[:0]const u8, db_flags: lib.Dbi.InitFlags) !struct { lib.Env, lib.Dbi } {
-    const env: lib.Env = try .init("./testdb/", .{ .max_dbs = 64 });
+const log = std.log.scoped(.behavior_tests);
+
+const SetupRes = struct { lib.Env, lib.Dbi, lib.Txn };
+fn setup(src: std.builtin.SourceLocation, dbi_flags: lib.Dbi.InitFlags) !SetupRes {
+    const env = lib.Env.init("testdb", .{ .max_dbs = 32 }) catch |e| {
+        log.err("setup failed(create env): {t}", .{e});
+        return error.Unrelated;
+    };
     errdefer env.deinit();
 
-    const dbi: lib.Dbi = init_dbi: {
-        var txn = try env.begin(@src(), .read_write, .{});
-        defer txn.abort();
+    var txn = lib.Txn.init(env, src, null, .read_write, .{}) catch |e| {
+        log.err("setup failed(create txn): {t}", .{e});
+        return error.Unrelated;
+    };
+    errdefer txn.abort();
 
-        var flags = db_flags;
-        flags.create = true;
+    const dbi_name = try std.fmt.allocPrint(std.testing.allocator, "{s}\x00", .{src.fn_name[5..]});
+    defer std.testing.allocator.free(dbi_name);
 
-        // const dbi: lib.Dbi = try .init(txn, db_name, flags);
-        const dbi = try env.open(txn, db_name, flags);
-        try txn.commit();
+    var actual_dbi_flags = dbi_flags;
+    actual_dbi_flags.create = true;
 
-        break :init_dbi dbi;
+    const dbi = lib.Dbi.init(txn, @ptrCast(dbi_name), actual_dbi_flags) catch |e| {
+        log.err("setup failed(create dbi): {t}", .{e});
+        return error.Unrelated;
     };
 
-    return .{ env, dbi };
+    return SetupRes{ env, dbi, txn };
 }
 
-test "nested transactions" {
-    const env, const dbi = try create_env("nested-txns", .{});
+const KEY_SIZE = 8;
+const DATA_SIZE = 16;
+
+const KEYS_AMT = 8;
+const DATA_AMT = 8;
+const DUPS_AMT = 4;
+
+const Key = [KEY_SIZE]u8;
+const Data = [DATA_SIZE]u8;
+
+test "minimal case" {
+    const env, const dbi, var txn = try setup(@src(), .{});
     defer env.deinit();
+    defer txn.abort();
+    try txn.commit();
+    _ = dbi;
+}
 
-    {
-        // order matters here, we must create the first cursor BEFORE the nested txn
+test "put commit get" {
+    var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
 
-        var txn_1 = try env.begin(@src(), .read_write, .{});
-        defer txn_1.abort();
-
-        var cursor_1 = try dbi.cursor(@src(), &txn_1);
-
-        var txn_2 = try env.begin_nested(@src(), &txn_1, .read_write, .{});
-        defer txn_2.abort();
-
-        var cursor_2 = try dbi.cursor(@src(), &txn_2);
-
-        try cursor_1.put("\x01", "wow");
-        try cursor_2.put("\x02", "yay");
-        try cursor_1.put("\x03", "huh");
-        try txn_2.commit();
-
-        try cursor_1.put("\x04", "pip");
-        try txn_1.commit();
-    }
-
-    var txn = try env.begin(@src(), .read_only, .{});
+    const env, const dbi, var txn = try setup(@src(), .{});
+    defer env.deinit();
     defer txn.abort();
 
-    const cursor = try dbi.cursor(@src(), &txn);
-    defer cursor.deinit();
+    var ctnr: struct {
+        keys: [KEYS_AMT]Key,
+        datas: [DATA_AMT]Data,
+    } = undefined;
+    rng.fill(std.mem.asBytes(&ctnr));
 
-    var iter = cursor.get_iter(.first, null, null, .next);
+    for (&ctnr.keys, &ctnr.datas) |*key, *data| {
+        try txn.put(dbi, key, data);
+    }
 
-    try std.testing.expectEqualStrings("wow", iter.next().?[1]);
-    try std.testing.expectEqualStrings("yay", iter.next().?[1]);
-    try std.testing.expectEqualStrings("huh", iter.next().?[1]);
-    try std.testing.expectEqualStrings("pip", iter.next().?[1]);
-    try std.testing.expect(iter.next() == null);
+    try txn.commit();
+    txn = try env.begin(@src(), .read_only, .{});
+
+    for (&ctnr.keys, &ctnr.datas) |*key, *expected_data| {
+        const actual_data = try txn.get(dbi, key) orelse return error.NotFound;
+        try std.testing.expectEqualSlices(u8, expected_data, actual_data);
+    }
 }
 
-test "cursor put + get" {
-    var rng: std.Random.Xoroshiro128 = .init(std.testing.random_seed);
+test "put commit get, cursor" {
+    var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
 
-    const env, const dbi = try create_env("cursor-put-get", .{});
+    const env, const dbi, var txn = try setup(@src(), .{});
     defer env.deinit();
+    defer txn.abort();
 
-    var datas: [4][16]u8 = undefined;
-    for (&datas) |*data| rng.fill(data);
+    var ctnr: struct {
+        keys: [KEYS_AMT]Key,
+        datas: [DATA_AMT]Data,
+    } = undefined;
+    rng.fill(std.mem.asBytes(&ctnr));
 
     {
-        var txn = try env.begin(@src(), .read_write, .{});
-        var cursor = try txn.cursor(@src(), dbi);
-        defer txn.abort();
+        const cursor = try txn.cursor(@src(), dbi);
+        defer cursor.deinit();
 
-        for (&datas, 0..) |*data, i| {
-            const key: u8 = @intCast(i);
-            try cursor.put(std.mem.asBytes(&key), data);
+        for (&ctnr.keys, &ctnr.datas) |*key, *data| {
+            try cursor.put(key, data);
         }
 
         try txn.commit();
     }
 
-    var txn = try env.begin(@src(), .read_only, .{});
+    txn = try env.begin(@src(), .read_only, .{});
+
+    const cursor = try txn.cursor(@src(), dbi);
+    defer cursor.deinit();
+
+    for (&ctnr.keys, &ctnr.datas) |*key, *expected_data| {
+        _, const actual_data = cursor.get(.set_key, key, null) orelse return error.NotFound;
+        try std.testing.expectEqualSlices(u8, expected_data, actual_data);
+    }
+}
+
+test "put commit get, dupsort" {
+    var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+
+    const env, const dbi, var txn = try setup(@src(), .{ .dup_sort = true });
+    defer env.deinit();
     defer txn.abort();
+
+    var ctnr: struct {
+        keys: [KEYS_AMT]Key,
+        datass: [KEYS_AMT][DUPS_AMT]Data,
+    } = undefined;
+    rng.fill(std.mem.asBytes(&ctnr));
+
+    for (&ctnr.keys, &ctnr.datass) |*key, *datas| {
+        for (datas) |*data| {
+            try txn.put(dbi, key, data);
+        }
+    }
+
+    try txn.commit();
+    txn = try env.begin(@src(), .read_only, .{});
+
+    const cursor = try txn.cursor(@src(), dbi);
+    defer cursor.deinit();
+
+    for (&ctnr.keys, &ctnr.datass) |*key, *datas| {
+        _ = cursor.get(.set, key, null) orelse return error.NotFound;
+        var dup_iter = cursor.get_iter(.first_dup, key, null, .next_dup);
+
+        while (dup_iter.next()) |dkv| {
+            const dk, const dv = dkv;
+            try std.testing.expectEqualSlices(u8, key, dk);
+
+            for (datas) |*data| {
+                if (std.mem.eql(u8, data, dv)) break;
+            } else {
+                return error.UnmatchedDup;
+            }
+        }
+    }
+}
+
+test "put_no_clobber" {
+    var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+
+    const env, const dbi, var txn = try setup(@src(), .{ .dup_sort = true });
+    defer env.deinit();
+    defer txn.abort();
+
+    var ctnr: struct {
+        keys: [KEYS_AMT]Key,
+        datas: [DATA_AMT]Data,
+    } = undefined;
+    rng.fill(std.mem.asBytes(&ctnr));
+
+    for (&ctnr.keys, &ctnr.datas) |*key, *data| {
+        try txn.put_no_clobber(dbi, key, data);
+        try std.testing.expectError(error.AlreadyExists, txn.put_no_clobber(dbi, key, data));
+    }
+}
+
+test "put_get" {
+    var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+
+    const env, const dbi, var txn = try setup(@src(), .{});
+    defer env.deinit();
+    defer txn.abort();
+
+    var ctnr: struct {
+        keys: [KEYS_AMT]Key,
+        datas: [DATA_AMT]Data,
+    } = undefined;
+    rng.fill(std.mem.asBytes(&ctnr));
+
+    for (&ctnr.keys, &ctnr.datas) |*key, *data| {
+        try std.testing.expectEqualSlices(u8, data, try txn.put_get(dbi, key, data));
+        try std.testing.expectEqualSlices(u8, data, try txn.put_get(dbi, key, "garbage"));
+    }
+}
+
+test "sort put commit get, put_append" {
+    var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+
+    const env, const dbi, var txn = try setup(@src(), .{});
+    defer env.deinit();
+    defer txn.abort();
+
+    var ctnr: struct {
+        keys: [KEYS_AMT]Key,
+        datas: [DATA_AMT]Data,
+    } = undefined;
+    rng.fill(std.mem.asBytes(&ctnr));
+
+    const SortCtx = struct {
+        pub fn lessThan(_: @TypeOf(.{}), a: Key, b: Key) bool {
+            return std.mem.order(u8, &a, &b) == .lt;
+        }
+    };
+    std.mem.sort(Key, &ctnr.keys, .{}, SortCtx.lessThan);
+
+    for (&ctnr.keys, &ctnr.datas) |*key, *data| {
+        try txn.put_append(dbi, key, data);
+    }
+
+    try txn.commit();
+    txn = try env.begin(@src(), .read_only, .{});
 
     const cursor = try txn.cursor(@src(), dbi);
     defer cursor.deinit();
 
     var iter = cursor.get_iter(.first, null, null, .next);
-
-    for (&datas, 0..) |*data, i| {
-        const k, const v = iter.next().?;
-
-        try std.testing.expectEqual(i, std.mem.bytesToValue(u8, k));
+    for (&ctnr.keys, &ctnr.datas) |*key, *data| {
+        const k, const v = iter.next() orelse return error.NotFound;
+        try std.testing.expectEqualSlices(u8, key, k);
         try std.testing.expectEqualSlices(u8, data, v);
     }
 
     try std.testing.expect(iter.next() == null);
 }
 
-test "dupsort cursor put + get" {
-    var rng: std.Random.Xoroshiro128 = .init(std.testing.random_seed);
+test "sort put commit get, put_append_dup" {
+    var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
 
-    const env, const dbi = try create_env("dupsort-cursor-put-get", .{ .dup_sort = true });
+    const env, const dbi, var txn = try setup(@src(), .{ .dup_sort = true });
     defer env.deinit();
-
-    // todo: this is a messy way to do this, cleanup?
-    var datas: [4][4][16]u8 = undefined;
-    for (&datas) |*lv1| for (lv1) |*lv2| rng.fill(lv2);
-
-    {
-        var txn = try env.begin(@src(), .read_write, .{});
-        var cursor = try txn.cursor(@src(), dbi);
-        defer txn.abort();
-
-        for (&datas, 0..) |*lv1, i| for (lv1) |*lv2| {
-            const key: u8 = @intCast(i);
-            try cursor.put(std.mem.asBytes(&key), lv2);
-        };
-
-        try txn.commit();
-    }
-
-    var txn = try env.begin(@src(), .read_only, .{});
     defer txn.abort();
 
-    const cursor = try txn.cursor(@src(), dbi);
-    defer cursor.deinit();
+    var ctnr: struct {
+        keys: [KEYS_AMT]Key,
+        datass: [KEYS_AMT][DUPS_AMT]Data,
+    } = undefined;
+    rng.fill(std.mem.asBytes(&ctnr));
 
-    const init_k, _ = cursor.get(.first, null, null) orelse unreachable;
-    var iter = cursor.get_iter(.first_dup, init_k, null, .next);
+    // sort
 
-    for (&datas, 0..) |*lv1, i| for (0..lv1.len) |_| {
-        const k, const v = iter.next().?;
-
-        try std.testing.expectEqual(i, std.mem.bytesToValue(u8, k));
-
-        const exists = for (lv1) |*lv2| {
-            if (std.mem.eql(u8, v, lv2)) break true;
-        } else false;
-
-        try std.testing.expect(exists);
+    const KeySortCtx = struct {
+        pub fn lessThan(_: @TypeOf(.{}), a: Key, b: Key) bool {
+            return std.mem.order(u8, &a, &b) == .lt;
+        }
     };
+    std.mem.sort(Key, &ctnr.keys, .{}, KeySortCtx.lessThan);
 
-    try std.testing.expect(iter.next() == null);
-}
+    const DataSortCtx = struct {
+        pub fn lessThan(_: @TypeOf(.{}), a: Data, b: Data) bool {
+            return std.mem.order(u8, &a, &b) == .lt;
+        }
+    };
+    for (&ctnr.datass) |*datas| std.mem.sort(Data, datas, .{}, DataSortCtx.lessThan);
 
-test "put_or_get + del" {
-    const env, const dbi = try create_env("put-or-get", .{});
-    defer env.deinit();
+    // put
 
-    {
-        var txn = try env.begin(@src(), .read_write, .{});
-        var cursor = try txn.cursor(@src(), dbi);
-        defer txn.abort();
-
-        try std.testing.expectEqualStrings("data1", try cursor.put_get("key1", "data1"));
-        try std.testing.expectEqualStrings("data1", try cursor.put_get("key1", "garbage"));
-        try std.testing.expectEqualStrings("data2", try cursor.put_get("key2", "data2"));
-        try std.testing.expectEqualStrings("data2", try cursor.put_get("key2", "trash"));
-        try cursor.del();
-
-        try txn.commit();
+    for (&ctnr.keys, &ctnr.datass) |*key, *datas| {
+        for (datas) |*data| {
+            try txn.put_append_dup(dbi, key, data);
+        }
     }
 
-    {
-        var txn = try env.begin(@src(), .read_write, .{});
-        defer txn.abort();
+    // commit
 
-        try std.testing.expectEqualStrings("data1", try dbi.put_get(txn, "key1", "dumpster"));
-        try std.testing.expectEqualStrings("data2", try dbi.put_get(txn, "key2", "data2"));
-        try std.testing.expectEqualStrings("data3", try dbi.put_get(txn, "key3", "data3"));
-        try std.testing.expectEqualStrings("data3", try dbi.put_get(txn, "key3", "litter"));
-        try std.testing.expect(try dbi.del(txn, "key3", null));
+    try txn.commit();
+    txn = try env.begin(@src(), .read_only, .{});
 
-        try txn.commit();
-    }
-
-    var txn = try env.begin(@src(), .read_only, .{});
-    defer txn.abort();
+    // get
 
     const cursor = try txn.cursor(@src(), dbi);
     defer cursor.deinit();
 
-    var iter = cursor.get_iter(.first, null, null, .next);
+    var key_iter = cursor.get_iter(.first, null, null, .next);
+    for (&ctnr.keys, &ctnr.datass) |*key, *datas| {
+        const k, _ = key_iter.next() orelse return error.NotFound;
+        try std.testing.expectEqualSlices(u8, key, k);
 
-    const k1, const v1 = iter.next().?;
-    try std.testing.expectEqualStrings("key1", k1);
-    try std.testing.expectEqualStrings("data1", v1);
+        var dup_iter = cursor.get_iter(.first_dup, k, null, .next_dup);
+        for (datas) |*data| {
+            _, const dv = dup_iter.next() orelse return error.NotFound;
+            try std.testing.expectEqualSlices(u8, data, dv);
+        }
 
-    const k2, const v2 = iter.next().?;
-    try std.testing.expectEqualStrings("key2", k2);
-    try std.testing.expectEqualStrings("data2", v2);
-
-    try std.testing.expect(iter.next() == null);
+        try std.testing.expect(dup_iter.next() == null);
+    }
+    try std.testing.expect(key_iter.next() == null);
 }
 
-test "cursor put get multiple" {
-    var rng: std.Random.Xoroshiro128 = .init(std.testing.random_seed);
+test "put commit get, put_reserve" {
+    var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
 
-    const env, const dbi = try create_env("put-multi", .{ .dup_sort = true, .dup_fixed = true });
+    const env, const dbi, var txn = try setup(@src(), .{});
     defer env.deinit();
+    defer txn.abort();
 
-    // 8KiB
-    const Data = u128;
-    var data: [512]Data = undefined;
-    rng.fill(std.mem.sliceAsBytes(&data));
+    var ctnr: struct {
+        keys: [KEYS_AMT]Key,
+        datas: [DATA_AMT]Data,
+    } = undefined;
+    rng.fill(std.mem.asBytes(&ctnr));
 
-    {
-        var txn = try env.begin(@src(), .read_write, .{});
-        defer txn.abort();
-
-        const cursor = try dbi.cursor(@src(), &txn);
-        defer cursor.deinit();
-
-        const appended = try cursor.put_multiple(Data, "data", &data);
-        try std.testing.expectEqual(data.len, appended);
-
-        try txn.commit();
+    for (&ctnr.keys, &ctnr.datas) |*key, *data| {
+        const buf = try txn.put_reserve(dbi, key, data.len);
+        @memcpy(buf, data);
     }
 
+    try txn.commit();
+    txn = try env.begin(@src(), .read_only, .{});
+
+    for (&ctnr.keys, &ctnr.datas) |*key, *expected_data| {
+        const actual_data = try txn.get(dbi, key) orelse return error.NotFound;
+        try std.testing.expectEqualSlices(u8, expected_data, actual_data);
+    }
+}
+
+test "put commit get, del odd keys" {
+    var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+
+    const env, const dbi, var txn = try setup(@src(), .{});
+    defer env.deinit();
+    defer txn.abort();
+
+    var ctnr: struct {
+        keys: [KEYS_AMT]Key,
+        datas: [DATA_AMT]Data,
+    } = undefined;
+    rng.fill(std.mem.asBytes(&ctnr));
+
+    for (&ctnr.keys, &ctnr.datas) |*key, *data| {
+        try txn.put(dbi, key, data);
+    }
+
+    for (&ctnr.keys, &ctnr.datas, 0..) |*key, *data, i| {
+        if (i % 2 == 0) continue;
+        try std.testing.expect(try txn.del(dbi, key, data));
+    }
+
+    try txn.commit();
+    txn = try env.begin(@src(), .read_only, .{});
+
+    for (&ctnr.keys, &ctnr.datas, 0..) |*key, *data, i| {
+        const res = try txn.get(dbi, key);
+
+        if (i % 2 == 0)
+            try std.testing.expectEqualSlices(u8, data, res orelse return error.NotFound)
+        else
+            try std.testing.expect(res == null);
+    }
+}
+
+test "put commit get, cursor del odd keys" {
+    var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+
+    const env, const dbi, var txn = try setup(@src(), .{});
+    defer env.deinit();
+    defer txn.abort();
+
+    var ctnr: struct {
+        keys: [KEYS_AMT]Key,
+        datas: [DATA_AMT]Data,
+    } = undefined;
+    rng.fill(std.mem.asBytes(&ctnr));
+
+    // note: this is to make the test code easier to understand
     const SortCtx = struct {
-        pub fn lessThan(_: @This(), a: Data, b: Data) bool {
-            return std.mem.nativeToBig(Data, a) < std.mem.nativeToBig(Data, b);
+        pub fn lessThan(_: @TypeOf(.{}), a: Key, b: Key) bool {
+            return std.mem.order(u8, &a, &b) == .lt;
         }
     };
-    std.mem.sort(Data, &data, SortCtx{}, SortCtx.lessThan);
+    std.mem.sort(Key, &ctnr.keys, .{}, SortCtx.lessThan);
 
-    var txn = try env.begin(@src(), .read_only, .{});
-    defer txn.abort();
+    // put
 
-    const cursor = try dbi.cursor(@src(), &txn);
-    defer cursor.deinit();
+    var cursor = try txn.cursor(@src(), dbi);
 
-    // get_multiple
-
-    var head: usize = 0;
-    _ = cursor.get(.set, "data", null);
-
-    while (cursor.get_multiple(Data, .next, null)) |page| {
-        defer head += page.len;
-
-        for (data[head..][0..page.len], page) |e, a|
-            try std.testing.expectEqual(e, a);
+    for (&ctnr.keys, &ctnr.datas) |*key, *data| {
+        try cursor.put_append(key, data);
     }
 
-    // iter
+    // del
 
-    head = 0;
-    var iter = cursor.get_iter(.set, "data", null, .next_dup);
+    _ = cursor.get(.first, null, null).?;
+    for (0..@divExact(KEYS_AMT, 2)) |_| {
+        _ = cursor.get(.next, null, null).?;
+        try cursor.del();
+        _ = cursor.get(.next, null, null); // only null when last iteration
+    }
 
-    while (iter.next()) |kv| : (head += 1) {
-        _, const v = kv;
+    // commit
 
-        const vd = std.mem.bytesToValue(Data, v);
-        try std.testing.expectEqual(data[head], vd);
+    try txn.commit();
+    txn = try env.begin(@src(), .read_only, .{});
+
+    // get
+
+    cursor = try txn.cursor(@src(), dbi);
+    defer cursor.deinit();
+
+    for (&ctnr.keys, &ctnr.datas, 0..) |*key, *data, i| {
+        const res = cursor.get(.set_key, key, null);
+
+        if (i % 2 == 0) {
+            _, const v = res orelse return error.NotFound;
+            try std.testing.expectEqualSlices(u8, data, v);
+        } else {
+            try std.testing.expect(res == null);
+        }
     }
 }
 
-test "put_append" {
-    const SortContext = struct {
-        pub fn lessThan(this: @This(), lhs: [32]u8, rhs: [32]u8) bool {
-            _ = this;
-            return std.mem.order(u8, &lhs, &rhs) == .lt;
-        }
-    };
+test "put commit get, empty contents" {
+    var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
 
-    var rng: std.Random.Xoroshiro128 = .init(std.testing.random_seed);
-
-    const env, const dbi = try create_env("put-append", .{});
+    const env, const dbi, var txn = try setup(@src(), .{});
     defer env.deinit();
-
-    var data: [8][32]u8 = undefined;
-    for (&data) |*lv1| rng.fill(lv1);
-
-    std.mem.sort([32]u8, &data, SortContext{}, SortContext.lessThan);
-
-    {
-        var txn = try env.begin(@src(), .read_write, .{});
-        var cursor = try dbi.cursor(@src(), &txn);
-        defer txn.abort();
-
-        for (&data, 0..) |*lv1, i| {
-            const key: u8 = @intCast(i);
-            try cursor.put_append_dup(std.mem.asBytes(&key), lv1);
-        }
-
-        try txn.commit();
-    }
-
-    var txn = try env.begin(@src(), .read_only, .{});
     defer txn.abort();
 
-    const cursor = try dbi.cursor(@src(), &txn);
+    var ctnr: struct {
+        keys: [KEYS_AMT]Key,
+        datas: [DATA_AMT]Data,
+    } = undefined;
+    rng.fill(std.mem.asBytes(&ctnr));
+
+    for (&ctnr.keys, &ctnr.datas) |*key, *data| {
+        try txn.put(dbi, key, data);
+    }
+
+    try std.testing.expect(dbi.empty_contents(txn));
+
+    try txn.commit();
+    txn = try env.begin(@src(), .read_only, .{});
+
+    for (&ctnr.keys) |*key| {
+        try std.testing.expect(try txn.get(dbi, key) == null);
+    }
+}
+
+test "put_multiple commit get_multiple" {
+    var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    const env, const dbi, var txn = try setup(@src(), .{ .dup_sort = true, .dup_fixed = true });
+    defer env.deinit();
+    defer txn.abort();
+
+    var ctnr: struct {
+        keys: [KEYS_AMT]Key,
+        datas: [DATA_AMT][]u32,
+        dests: [DATA_AMT][]u32,
+    } = undefined;
+    rng.fill(std.mem.asBytes(&ctnr.keys));
+
+    // init
+
+    for (&ctnr.datas) |*data| data.* = try arena.allocator().alloc(u32, 1024);
+    for (&ctnr.dests) |*dest| dest.* = try arena.allocator().alloc(u32, 1024);
+
+    var count: u32 = 0;
+    for (&ctnr.datas) |data| {
+        for (data) |*elem| {
+            defer count += 1;
+            elem.* = count;
+        }
+    }
+
+    // put
+
+    var cursor = try txn.cursor(@src(), dbi);
+
+    for (&ctnr.keys, &ctnr.datas) |*key, data| {
+        var head: usize = 0;
+        while (head < ctnr.datas[0].len) {
+            head += try cursor.put_multiple(u32, key, data[head..]);
+        }
+    }
+
+    // commmit
+
+    try txn.commit();
+    txn = try env.begin(@src(), .read_only, .{});
+
+    // get
+
+    cursor = try txn.cursor(@src(), dbi);
     defer cursor.deinit();
 
-    var iter = cursor.get_iter(.first, null, null, .next_dup);
-    var i: usize = 0;
-    while (iter.next()) |kv| : (i += 1) {
+    for (&ctnr.keys, &ctnr.datas, &ctnr.dests) |*key, data, dest| {
+        var head: usize = 0;
+
+        _ = cursor.get(.set, key, null) orelse return error.NotFound;
+        while (cursor.get_multiple(u32, .next, key)) |page| {
+            defer head += page.len;
+            @memmove(dest[head..][0..page.len], page);
+        }
+
+        try std.testing.expectEqual(data.len, head);
+        for (dest) |b| try std.testing.expect(b < count);
+    }
+}
+
+test "cursor count" {
+    var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
+
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    const env, const dbi, var txn = try setup(@src(), .{ .dup_sort = true });
+    defer env.deinit();
+    defer txn.abort();
+
+    var cursor = try txn.cursor(@src(), dbi);
+
+    var keys: [KEYS_AMT]Key = undefined;
+    rng.fill(std.mem.asBytes(&keys));
+
+    for (&keys, 1..) |*key, i| {
+        for (0..i) |j| {
+            const data: u128 = j; // we dont care what data is, we're counting dups
+            try cursor.put_append_dup(key, std.mem.asBytes(&data));
+        }
+    }
+
+    try txn.commit();
+    txn = try env.begin(@src(), .read_only, .{});
+
+    cursor = try txn.cursor(@src(), dbi);
+    defer cursor.deinit();
+
+    for (&keys, 1..) |*key, i| {
+        _ = cursor.get(.set, key, null) orelse return error.NotFound;
+        try std.testing.expectEqual(cursor.count().?, i);
+    }
+}
+
+test "cursor del_all" {
+    const env, const dbi, var txn = try setup(@src(), .{ .dup_sort = true });
+    defer env.deinit();
+    defer txn.abort();
+
+    var cursor = try txn.cursor(@src(), dbi);
+
+    for (0..2) |i| {
         const key: u8 = @intCast(i);
 
-        const k, const v = kv;
-        try std.testing.expectEqualSlices(u8, std.mem.asBytes(&key), k);
-        try std.testing.expectEqualSlices(u8, &data[i], v);
+        for (0..DUPS_AMT) |j| {
+            const data: u128 = j;
+            try cursor.put(std.mem.asBytes(&key), std.mem.asBytes(&data));
+        }
     }
 
-    try std.testing.expect(iter.next() == null);
-    try std.testing.expectEqual(data.len, i);
-}
+    _ = cursor.get(.set, &.{0}, null);
+    try cursor.del_all();
 
-test "put_append_dup" {
-    const SortContext = struct {
-        pub fn lessThan(this: @This(), lhs: [32]u8, rhs: [32]u8) bool {
-            _ = this;
-            return std.mem.order(u8, &lhs, &rhs) == .lt;
-        }
-    };
+    try txn.commit();
+    txn = try env.begin(@src(), .read_only, .{});
 
-    var rng: std.Random.Xoroshiro128 = .init(std.testing.random_seed);
-
-    const env, const dbi = try create_env("put-append-dup", .{ .dup_sort = true, .dup_fixed = true });
-    defer env.deinit();
-
-    var data: [8][32]u8 = undefined;
-    for (&data) |*lv1| rng.fill(lv1);
-
-    std.mem.sort([32]u8, &data, SortContext{}, SortContext.lessThan);
-
-    {
-        var txn = try env.begin(@src(), .read_write, .{});
-        var cursor = try dbi.cursor(@src(), &txn);
-        defer txn.abort();
-
-        for (&data) |*lv1| {
-            try cursor.put_append_dup("\x00", lv1);
-        }
-
-        try txn.commit();
-    }
-
-    var txn = try env.begin(@src(), .read_only, .{});
-    defer txn.abort();
-
-    const cursor = try dbi.cursor(@src(), &txn);
+    cursor = try txn.cursor(@src(), dbi);
     defer cursor.deinit();
 
-    var iter = cursor.get_iter(.first_dup, "\x00", null, .next_dup);
-    std.debug.assert(iter.next().?[1].len == 0); // i assume this is a quirk of using only append_dup
+    try std.testing.expect(cursor.get(.set, &.{0}, null) == null);
+    try std.testing.expectEqual(null, cursor.count());
 
-    var i: usize = 0;
-    while (iter.next()) |kv| : (i += 1) {
-        const k, const v = kv;
-        try std.testing.expectEqualSlices(u8, "\x00", k);
-        try std.testing.expectEqualSlices(u8, &data[i], v);
-    }
-
-    try std.testing.expect(iter.next() == null);
-    try std.testing.expectEqual(data.len, i);
+    try std.testing.expect(cursor.get(.set, &.{1}, null) != null);
+    try std.testing.expectEqual(DUPS_AMT, cursor.count() orelse return error.NotFound);
 }
 
-test "put_reserve" {
-    var rng: std.Random.Xoroshiro128 = .init(std.testing.random_seed);
-
-    const env, const dbi = try create_env("put-reserve", .{});
+test "put commit get, put_replace" {
+    const env, const dbi, var txn = try setup(@src(), .{ .dup_sort = true });
     defer env.deinit();
-
-    var data: [32]u8 = undefined;
-    rng.fill(&data);
-
-    {
-        var txn = try env.begin(@src(), .read_write, .{});
-        var cursor = try dbi.cursor(@src(), &txn);
-        defer txn.abort();
-
-        const output = try cursor.put_reserve("key0", data.len);
-        try std.testing.expectEqual(data.len, output.len);
-
-        @memcpy(output, &data);
-        try txn.commit();
-    }
-
-    var txn = try env.begin(@src(), .read_only, .{});
     defer txn.abort();
 
-    const v = try dbi.get_const(txn, "key0") orelse return error.NotFound;
-    try std.testing.expectEqualSlices(u8, &data, v);
-}
+    var cursor = try txn.cursor(@src(), dbi);
 
-test "Cursor count" {
-    var rng: std.Random.DefaultPrng = .init(std.testing.random_seed);
-    const ROUNDS = 8;
-
-    const env, const dbi = try create_env("cursor-count", .{ .dup_sort = true });
-    defer env.deinit();
-
-    {
-        var txn = try env.begin(@src(), .read_write, .{});
-        var cursor = try dbi.cursor(@src(), &txn);
-        defer txn.abort();
-
-        var data: [32]u8 = undefined;
-        for (0..ROUNDS) |_| {
-            rng.fill(&data);
-            try cursor.put("\x00", &data);
-        }
-
-        try txn.commit();
+    for (0..4) |i| {
+        const key: u8 = @intCast(i);
+        const data: u8 = 1;
+        try cursor.put_append(&.{key}, &.{data});
     }
 
-    var txn = try env.begin(@src(), .read_only, .{});
-    defer txn.abort();
+    const k, _ = cursor.get(.set_key, &.{2}, null) orelse return error.NotFound;
+    try cursor.put_replace(k, "x");
 
-    const cursor = try dbi.cursor(@src(), &txn);
-    defer cursor.deinit();
-
-    _ = cursor.get(.set, "\x00", null);
-    try std.testing.expectEqual(ROUNDS, cursor.count().?);
-}
-
-test "empty_contents" {
-    const env, const dbi = try create_env("empty-contents", .{ .dup_sort = true, .dup_fixed = true });
-    defer env.deinit();
-
-    {
-        var txn = try env.begin(@src(), .read_write, .{});
-        var cursor = try txn.cursor(@src(), dbi);
-        defer txn.abort();
-
-        try cursor.put("hello", "world");
-        try txn.commit();
-    }
-
-    {
-        var txn = try env.begin(@src(), .read_only, .{});
-        defer txn.abort();
-
-        try std.testing.expectEqualStrings(
-            "world",
-            (try dbi.get(txn, "hello")).?,
-        );
-    }
-
-    {
-        var txn = try env.begin(@src(), .read_write, .{});
-        defer txn.abort();
-
-        try std.testing.expect(dbi.empty_contents(txn));
-        try txn.commit();
-    }
-
-    {
-        var txn = try env.begin(@src(), .read_only, .{});
-        defer txn.abort();
-
-        try std.testing.expect(try dbi.get(txn, "hello") == null);
-    }
-}
-
-test "Debug safety" {
-    if (!@import("utils.zig").DEBUG) return error.SkipZigTest;
-
-    const env, const dbi = try create_env("debug-safety", .{});
-    defer env.deinit();
-
-    // txn abort() then commit()
-    {
-        var txn = try env.begin(@src(), .read_write, .{});
-        txn.abort();
-        try std.testing.expectError(error.Aborted, txn.commit());
-    }
-
-    // txn bad access
-    {
-        var txn = try env.begin(@src(), .read_write, .{});
-        defer txn.abort();
-
-        try std.testing.expectError(error.BadAccess, txn.reset());
-    }
-
-    // txn has children
-    {
-        var txn = try env.begin(@src(), .read_write, .{});
-        defer txn.abort();
-
-        var child_txn = try env.begin_nested(@src(), &txn, .read_write, .{});
-        defer child_txn.abort();
-
-        try std.testing.expectError(error.TxnHasChildren, txn.cursor(@src(), dbi));
-    }
-
-    // cursor bad access
-    {
-        var txn = try env.begin(@src(), .read_only, .{});
-        defer txn.abort();
-
-        var cursor = try txn.cursor(@src(), dbi);
-        defer cursor.deinit();
-
-        try std.testing.expectError(error.BadAccess, cursor.put(undefined, undefined));
-        try std.testing.expectError(error.BadAccess, cursor.put_replace(undefined, undefined));
-        try std.testing.expectError(error.BadAccess, cursor.put_no_clobber(undefined, undefined));
-        try std.testing.expectError(error.BadAccess, cursor.put_get(undefined, undefined));
-        try std.testing.expectError(error.BadAccess, cursor.put_append(undefined, undefined));
-        try std.testing.expectError(error.BadAccess, cursor.put_append_dup(undefined, undefined));
-        try std.testing.expectError(error.BadAccess, cursor.del());
-        try std.testing.expectError(error.BadAccess, cursor.del_all());
-    }
+    try txn.commit();
 }
