@@ -1,14 +1,18 @@
 # lmdb zig wrapper library
 
 ## Goals
+
 - Functional wrappers providing for every use case covered by lmdb
 
 ## Examples
+
 see `/examples/`
 
 ### "How do I use this?"
+
 - First, fetch the package: `zig fetch --save=lmdb git+https://github.com/zxcv05/lmdb-zig`
 - Then, modify your `build.zig`:
+
 ```zig
 //! build.zig
 
@@ -19,11 +23,14 @@ const lmdb_lib = lmdb_dep.artifact("lmdb"); // for linking (ignore this if you w
 // ...
 
 my_module.addImport("lmdb", lmdb_mod);
+
 my_exe.linkLibrary(lmdb_lib);
 // OR, to use system-installed library instead:
 my_exe.linkSystemLibrary("lmdb");
 ```
+
 - Finally, you can use lmdb in your project
+
 ```zig
 //! my-file.zig
 
@@ -38,13 +45,17 @@ pub fn my_func() !void {
 ```
 
 ### "Can I enable lmdb's tracing?"
+
 As long as you're not using the system-installed library, you can freely control when tracing is enabled
+
 - In your `build.zig`, all you need to change is the following line:
+
 ```zig
 const lmdb_dep = b.dependency("lmdb", .{ .target = target, .optimize = optimize, .@"use-tracing" = true });
 ```
 
 ## build.zig
+
 - zig wrappers available as module `lmdb`
 - translated `liblmdb` headers available as module `c`
 - compiled `liblmdb` static library available as artifact `lmdb`
@@ -56,5 +67,6 @@ const lmdb_dep = b.dependency("lmdb", .{ .target = target, .optimize = optimize,
   - `-Dtests-use-system-lib`: For `test` step, use system installed `liblmdb` library instead of the one we build (default: false)
 
 # License
+
 This project is subject to the terms of the OpenLDAP Public License v2.8 (See `LICENSE`)
-Copyright 2025 lmdb-zig contributors
+Copyright 2025,2026 lmdb-zig contributors

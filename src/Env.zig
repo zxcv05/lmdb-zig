@@ -59,12 +59,12 @@ pub fn init(path: [:0]const u8, options: InitOptions) !Env {
         .INVALID => error.CorruptedHeaders,
         .VERSION_MISMATCH => error.VersionMismatch,
 
-        _ => |rc| {
+        else => |rc| {
             log.err("Env.init: {t}", .{rc});
             unreachable;
         },
 
-        else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+        _ => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
             .NOTDIR => error.NotADirectory,
             .NOENT => error.PathDoesntExist,
             .ACCES => error.PermissionDenied,

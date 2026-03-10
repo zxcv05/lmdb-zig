@@ -1,10 +1,9 @@
 const std = @import("std");
+const Build = std.Build;
 
-const EXAMPLES = [_][]const u8{
-    "dump-db",
-};
+const EXAMPLES = [_][]const u8{ "dump-db", "fill-db" };
 
-pub fn build(b: *std.Build) !void {
+pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -20,7 +19,8 @@ pub fn build(b: *std.Build) !void {
     const lmdb_lib = makeLmdbLib(b, upstream_dep, target, optimize, use_tracing);
     const lmdb_c = makeLmdbC(b, upstream_dep, target, optimize);
 
-    // zig wrappers live here
+    // zig wrappers
+
     const root_mod = b.addModule("lmdb", .{
         .root_source_file = b.path("src/root.zig"),
         .imports = &.{.{ .name = "c", .module = lmdb_c }},
@@ -38,19 +38,28 @@ pub fn build(b: *std.Build) !void {
 
     // unit tests
 
+    const test_mod = b.createModule(.{
+        .root_source_file = root_mod.root_source_file,
+        .imports = &.{.{ .name = "c", .module = lmdb_c }},
+
+        .target = target,
+        .optimize = optimize,
+    });
+
+    if (tests_use_system_lib) {
+        test_mod.linkSystemLibrary("lmdb", .{});
+    } else {
+        test_mod.linkLibrary(lmdb_lib);
+    }
+
     const unit_tests = b.addTest(.{
-        .root_module = root_mod,
+        .root_module = test_mod,
         .use_llvm = false,
         .filters = &.{test_filter},
     });
 
-    if (tests_use_system_lib) {
-        unit_tests.linkSystemLibrary("lmdb");
-    } else {
-        unit_tests.linkLibrary(lmdb_lib);
-    }
-
     const test_step = b.step("test", "Run unit tests");
+
     if (no_run) {
         test_step.dependOn(&unit_tests.step);
     } else {
@@ -68,6 +77,7 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
             .target = target,
         });
+        module.linkLibrary(lmdb_lib);
 
         const exe = b.addExecutable(.{
             .name = name,
@@ -82,29 +92,25 @@ pub fn build(b: *std.Build) !void {
     }
 }
 
-/// create static library from lmdb source (derived from the Makefile), available under artifact named `lmdb`
+/// create static library from lmdb source (derived from the Makefile) -
+/// available under artifact named `lmdb`
 fn makeLmdbLib(
-    b: *std.Build,
-    upstream: *std.Build.Dependency,
-    target: std.Build.ResolvedTarget,
+    b: *Build,
+    upstream: *Build.Dependency,
+    target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     use_tracing: bool,
-) *std.Build.Step.Compile {
-    const lib = b.addLibrary(.{
-        .name = "lmdb",
-        .linkage = .static,
+) *Build.Step.Compile {
+    const lib_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
 
-        .root_module = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-
-            .link_libc = true,
-            // 0.14.x uses a bool for this field
-            .sanitize_c = if (@hasDecl(std.zig, "SanitizeC")) .off else false,
-        }),
+        .link_libc = true,
+        // 0.14.x uses a bool for this field
+        .sanitize_c = if (@hasDecl(std.zig, "SanitizeC")) .off else false,
     });
 
-    lib.addCSourceFiles(.{
+    lib_mod.addCSourceFiles(.{
         .language = .c,
         .root = upstream.path("libraries/liblmdb/"),
         .files = &.{ "mdb.c", "midl.c" },
@@ -123,16 +129,20 @@ fn makeLmdbLib(
         },
     });
 
-    return lib;
+    return b.addLibrary(.{
+        .name = "lmdb",
+        .linkage = .static,
+        .root_module = lib_mod,
+    });
 }
 
 /// create translate step for lmdb headers, available under module named `c`
 fn makeLmdbC(
-    b: *std.Build,
-    upstream: *std.Build.Dependency,
-    target: std.Build.ResolvedTarget,
+    b: *Build,
+    upstream: *Build.Dependency,
+    target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-) *std.Build.Module {
+) *Build.Module {
     const translate = b.addTranslateC(.{
         .root_source_file = upstream.path("libraries/liblmdb/lmdb.h"),
         .use_clang = true,

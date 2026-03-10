@@ -92,13 +92,32 @@ test {
         @intFromEnum(E.SUCCESS),
     );
 
-    // TODO: this hack only works because the test runner is single threaded.
-    //       will need to revisit if/when that changes
-    std.fs.cwd().makeDir("testdb") catch {};
-    std.fs.cwd().deleteFile("testdb/data.mdb") catch {};
-    std.fs.cwd().deleteFile("testdb/lock.mdb") catch {};
+    const builtin = @import("builtin");
 
-    std.testing.refAllDeclsRecursive(@This());
-    std.testing.refAllDeclsRecursive(@import("Val.zig"));
-    std.testing.refAllDecls(@import("behavior_tests.zig"));
+    // TODO: this hack only works because the test runner runs tests in order
+    switch (builtin.zig_version.minor) {
+        15 => {
+            const cwd = std.fs.cwd();
+            cwd.makeDir("testdb") catch {};
+            cwd.deleteFile("testdb/data.mdb") catch {};
+            cwd.deleteFile("testdb/lock.mdb") catch {};
+        },
+        16 => {
+            const io = std.testing.io;
+            const cwd = std.Io.Dir.cwd();
+
+            cwd.createDir(io, "testdb", .default_dir) catch {};
+            cwd.deleteFile(io, "testdb/data.mdb") catch {};
+            cwd.deleteFile(io, "testdb/lock.mdb") catch {};
+        },
+        else => return error.UnsupportedZigVersion,
+    }
+
+    _ = @This();
+    _ = Txn;
+    _ = Env;
+    _ = Dbi;
+    _ = Cursor;
+    _ = @import("Val.zig");
+    _ = @import("behavior_tests.zig");
 }

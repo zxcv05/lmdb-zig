@@ -1,17 +1,39 @@
 const std = @import("std");
 const lmdb = @import("lmdb");
+const builtin = @import("builtin");
 
-pub fn main() !void {
-    const dbpath, const dbname = get: {
-        var args = std.process.args();
-        _ = args.skip(); // cmdline
+pub const main = switch (builtin.zig_version.minor) {
+    15 => main_15,
+    16 => main_16,
+    else => @compileError("Unsupported zig version: " ++ builtin.zig_version_string),
+};
 
-        break :get .{
-            args.next() orelse return error.NoArgGiven,
-            args.next(),
-        };
-    };
+// tested with zig 0.16.0-dev.2722+f16eb18ce
+fn main_16(init: std.process.Init) !void {
+    const gpa = init.gpa;
 
+    var args = try init.minimal.args.iterateAllocator(gpa);
+    defer args.deinit();
+
+    _ = args.skip();
+    const dbpath = args.next() orelse return error.GiveMeDbPath;
+    const dbname = args.next();
+
+    return example(dbpath, dbname);
+}
+
+// tested with zig 0.15.1
+fn main_15() !void {
+    var args = std.process.args();
+    _ = args.skip();
+
+    const dbpath = args.next() orelse return error.GiveMeDbPath;
+    const dbname = args.next();
+
+    return example(dbpath, dbname);
+}
+
+fn example(dbpath: [:0]const u8, dbname: ?[:0]const u8) !void {
     const env: lmdb.Env = try .init(dbpath, .{ .max_dbs = 8 });
     defer env.deinit();
 
