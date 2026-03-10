@@ -78,7 +78,11 @@ pub fn errno(rc: anytype) E {
     return @enumFromInt(rc);
 }
 
-pub fn lmdbUnhandledError(src: std.builtin.SourceLocation, rc: anytype) !void {
+pub const UnhandledError = error{UnknownError};
+pub fn lmdbUnhandledError(
+    src: std.builtin.SourceLocation,
+    rc: anytype,
+) UnhandledError {
     const PANIC_ON_UNHANDLED_ERROR = false;
 
     log.err("{s}: Unhandled error: {any}", .{ src.fn_name, rc });

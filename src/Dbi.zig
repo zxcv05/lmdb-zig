@@ -48,10 +48,7 @@ pub fn init(txn: Txn, name: ?[:0]const u8, flags: InitFlags) !Dbi {
         .BAD_VALSIZE => error.BadValsize, // unsupported size of key/db name/data, or wrong DUPFIXED size
         .INCOMPATIBLE => error.Incompatible, // database was dropped and opened with different flags
 
-        else => |rc| {
-            try root.lmdbUnhandledError(@src(), rc);
-            unreachable;
-        },
+        else => |rc| root.lmdbUnhandledError(@src(), rc),
     };
 }
 
@@ -71,18 +68,11 @@ pub fn get(this: Dbi, txn: Txn, key: []const u8) !?[]u8 {
         .SUCCESS => c_out.unalias(),
         .NOTFOUND => null,
 
-        _ => |rc| {
-            try root.lmdbUnhandledError(@src(), rc);
-            unreachable;
-        },
+        else => |rc| root.lmdbUnhandledError(@src(), rc),
 
-        else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+        _ => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
             .INVAL => return error.Invalid,
-
-            else => {
-                try root.lmdbUnhandledError(@src(), rc);
-                unreachable;
-            },
+            else => root.lmdbUnhandledError(@src(), rc),
         },
     };
 }
@@ -169,19 +159,13 @@ fn put_impl(this: Dbi, txn: Txn, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags:
         .TXN_FULL => error.TxnFull,
         .KEYEXIST => error.AlreadyExists,
 
-        _ => |rc| {
-            try root.lmdbUnhandledError(@src(), rc);
-            unreachable;
-        },
+        else => |rc| root.lmdbUnhandledError(@src(), rc),
 
-        else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+        _ => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
             .ACCES => error.ReadOnly,
             .INVAL => error.Invalid,
 
-            else => {
-                try root.lmdbUnhandledError(@src(), rc);
-                unreachable;
-            },
+            else => root.lmdbUnhandledError(@src(), rc),
         },
     };
 }
@@ -202,19 +186,13 @@ pub fn del(this: Dbi, txn: Txn, key: []const u8, data: ?[]const u8) !bool {
         .SUCCESS => true,
         .NOTFOUND => false,
 
-        _ => |rc| {
-            try root.lmdbUnhandledError(@src(), rc);
-            unreachable;
-        },
+        else => |rc| root.lmdbUnhandledError(@src(), rc),
 
-        else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+        _ => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
             .ACCES => error.ReadOnly,
             .INVAL => error.Invalid,
 
-            else => {
-                try root.lmdbUnhandledError(@src(), rc);
-                unreachable;
-            },
+            else => root.lmdbUnhandledError(@src(), rc),
         },
     };
 }

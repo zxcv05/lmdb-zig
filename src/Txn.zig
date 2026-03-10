@@ -61,20 +61,14 @@ pub fn init(
         .MAP_RESIZED => error.MapResized,
         .READERS_FULL => error.ReadersFull,
 
-        _ => |rc| {
-            try root.lmdbUnhandledError(@src(), rc);
-            unreachable;
-        },
+        else => |rc| root.lmdbUnhandledError(@src(), rc),
 
-        else => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+        _ => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
             // If NO_TLS isnt set on the Env then only one read only txn per thread is allowed
             .INVAL => error.BlockedByReadOnlyTxn,
             .NOMEM => error.OutOfMemory,
 
-            else => {
-                try root.lmdbUnhandledError(@src(), rc);
-                unreachable;
-            },
+            else => root.lmdbUnhandledError(@src(), rc),
         },
     };
 }
@@ -118,10 +112,7 @@ pub fn commit(this: *Txn) !void {
         .NOMEM => error.OutOfMemory,
         .IO => error.IoError,
 
-        else => |rc| {
-            try root.lmdbUnhandledError(@src(), rc);
-            unreachable;
-        },
+        else => |rc| root.lmdbUnhandledError(@src(), rc),
     };
 }
 
@@ -177,6 +168,7 @@ pub fn reset(this: *Txn) !void {
 }
 
 /// Renew a reset read only txn
+/// Sets `status` to `.open`
 pub fn renew(this: *Txn) !void {
     switch (this.status) {
         .reset => {},

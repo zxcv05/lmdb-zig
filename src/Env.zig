@@ -59,10 +59,7 @@ pub fn init(path: [:0]const u8, options: InitOptions) !Env {
         .INVALID => error.CorruptedHeaders,
         .VERSION_MISMATCH => error.VersionMismatch,
 
-        else => |rc| {
-            log.err("Env.init: {t}", .{rc});
-            unreachable;
-        },
+        else => |rc| root.lmdbUnhandledError(@src(), rc),
 
         _ => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
             .NOTDIR => error.NotADirectory,
@@ -70,10 +67,7 @@ pub fn init(path: [:0]const u8, options: InitOptions) !Env {
             .ACCES => error.PermissionDenied,
             .AGAIN => error.EnvironmentLocked,
 
-            else => {
-                log.err("Env.init: {any}", .{rc});
-                unreachable;
-            },
+            else => root.lmdbUnhandledError(@src(), rc),
         },
     };
 }
@@ -93,10 +87,7 @@ pub fn sync(this: Env, force: bool) !void {
         .INVAL => return error.Invalid,
         .IO => return error.IoError,
 
-        else => |rc| {
-            log.err("Env.sync: {any}", .{rc});
-            unreachable;
-        },
+        else => |rc| root.lmdbUnhandledError(@src(), rc),
     }
 }
 
