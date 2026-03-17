@@ -28,8 +28,8 @@ pub fn init(src: std.builtin.SourceLocation, dbi: Dbi, txn: *const Txn) !Cursor 
     if (utils.DEBUG and txn.debug.children > 0) {
         utils.printWithSrc(
             src,
-            "Cursor.init() called with {*} that has {d} children",
-            .{ txn, txn.debug.children },
+            "Cursor.init() called with txn that has {d} children",
+            .{txn.debug.children},
         );
         return error.TxnHasChildren;
     }
@@ -59,8 +59,8 @@ pub fn deinit(this: Cursor) void {
             .aborted, .committed => if (this.debug.access == .read_write) {
                 utils.printWithSrc(
                     this.debug.src,
-                    "deinit() called on {t} {*} whose owning {*} is already {t} (skipping)",
-                    .{ this.debug.access, this, this.debug.owner, this.debug.owner.status },
+                    "deinit() called on {t} cursor whose owning txn is already {t} (skipping)",
+                    .{ this.debug.access, this.debug.owner.status },
                 );
                 return;
             },
@@ -74,7 +74,7 @@ pub fn deinit(this: Cursor) void {
 /// Renew a read-only cursor
 pub fn renew(this: *Cursor, txn: *const Txn) !void {
     if (utils.DEBUG and this.debug.access != .read_only) {
-        utils.printWithSrc(this.debug.src, "renew() called on read_write {*}", .{this});
+        utils.printWithSrc(this.debug.src, "renew() called on read_write cursor", .{});
         return error.BadAccess;
     }
 
@@ -128,7 +128,7 @@ pub const get_iter = GetIterator.init;
 
 pub fn put(this: Cursor, key: []const u8, data: []const u8) !void {
     if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "put() called on read_only {*}", .{this});
+        utils.printWithSrc(this.debug.src, "put() called on read_only cursor", .{});
         return error.BadAccess;
     }
 
@@ -142,7 +142,7 @@ pub fn put(this: Cursor, key: []const u8, data: []const u8) !void {
 /// key must match item at the current cursor position
 pub fn put_replace(this: Cursor, key: []const u8, data: []const u8) !void {
     if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "put_replace() called on read_only {*}", .{this});
+        utils.printWithSrc(this.debug.src, "put_replace() called on read_only cursor", .{});
         return error.BadAccess;
     }
 
@@ -156,7 +156,7 @@ pub fn put_replace(this: Cursor, key: []const u8, data: []const u8) !void {
 /// supported for DUPSORT databases
 pub fn put_no_clobber(this: Cursor, key: []const u8, data: []const u8) !void {
     if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "put_no_clobber() called on read_only {*}", .{this});
+        utils.printWithSrc(this.debug.src, "put_no_clobber() called on read_only cursor", .{});
         return error.BadAccess;
     }
 
@@ -170,7 +170,7 @@ pub fn put_no_clobber(this: Cursor, key: []const u8, data: []const u8) !void {
 /// will put data (if not existing) or return it (if existing)
 pub fn put_get(this: Cursor, key: []const u8, data: []const u8) ![]u8 {
     if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "put_get() called on read_only {*}", .{this});
+        utils.printWithSrc(this.debug.src, "put_get() called on read_only cursor", .{});
         return error.BadAccess;
     }
 
@@ -189,7 +189,7 @@ pub fn put_get(this: Cursor, key: []const u8, data: []const u8) ![]u8 {
 /// must be sorted
 pub fn put_append(this: Cursor, key: []const u8, data: []const u8) !void {
     if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "put_append() called on read_only {*}", .{this});
+        utils.printWithSrc(this.debug.src, "put_append() called on read_only cursor", .{});
         return error.BadAccess;
     }
 
@@ -206,7 +206,7 @@ pub fn put_append(this: Cursor, key: []const u8, data: []const u8) !void {
 /// supported for DUPSORT databases
 pub fn put_append_dup(this: Cursor, key: []const u8, data: []const u8) !void {
     if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "put_append_dup() called on read_only {*}", .{this});
+        utils.printWithSrc(this.debug.src, "put_append_dup() called on read_only cursor", .{});
         return error.BadAccess;
     }
 
@@ -223,7 +223,7 @@ pub fn put_append_dup(this: Cursor, key: []const u8, data: []const u8) !void {
 /// NOT supported for DUPSORT databased
 pub fn put_reserve(this: Cursor, key: []const u8, size: usize) ![]u8 {
     if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "put_reserve() called on read_only {*}", .{this});
+        utils.printWithSrc(this.debug.src, "put_reserve() called on read_only cursor", .{});
         return error.BadAccess;
     }
 
@@ -272,7 +272,7 @@ fn put_impl(this: Cursor, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags: c_uint
 /// Delete current key/data pair
 pub fn del(this: Cursor) !void {
     if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "del() called on read_only {*}", .{this});
+        utils.printWithSrc(this.debug.src, "del() called on read_only cursor", .{});
         return error.BadAccess;
     }
 
@@ -283,7 +283,7 @@ pub fn del(this: Cursor) !void {
 /// supported for DUPSORT databases
 pub fn del_all(this: Cursor) !void {
     if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "del_all() called on read_only {*}", .{this});
+        utils.printWithSrc(this.debug.src, "del_all() called on read_only cursor", .{});
         return error.BadAccess;
     }
 

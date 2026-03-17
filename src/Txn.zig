@@ -87,8 +87,8 @@ pub fn commit(this: *Txn) !void {
         if (this.debug.access == .read_only) {
             utils.printWithSrc(
                 this.debug.src,
-                "commit() called on {t} {*}",
-                .{ this.debug.access, this },
+                "commit() called on {t} txn",
+                .{this.debug.access},
             );
             return error.BadAccess;
         }
@@ -145,8 +145,8 @@ pub fn reset(this: *Txn) !void {
         if (this.debug.access != .read_only) {
             utils.printWithSrc(
                 this.debug.src,
-                "reset() called on {t} {*}",
-                .{ this.debug.access, this },
+                "reset() called on {t} txn",
+                .{this.debug.access},
             );
             return error.BadAccess;
         }
@@ -154,8 +154,8 @@ pub fn reset(this: *Txn) !void {
         if (this.debug.children > 0) {
             utils.printWithSrc(
                 this.debug.src,
-                "reset() called on {t} {*} with {d} children",
-                .{ this.status, this, this.debug.children },
+                "reset() called on {t} txn with {d} children",
+                .{ this.status, this.debug.children },
             );
             return error.TxnHasChildren;
         }
