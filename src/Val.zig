@@ -40,7 +40,8 @@ pub inline fn alias(this: *Val) ?*c.MDB_val {
 
 /// Unwraps the MDB_val struct into a slice, if possible
 pub inline fn unalias_maybe(this: Val) ?[]u8 {
-    if (this.data.mv_size == 0 or @intFromPtr(this.data.mv_data) == 0) return null;
+    if (@intFromPtr(this.data.mv_data) == 0) return null;
+    if (this.data.mv_size == 0) return &.{};
 
     const ptr: [*]u8 = @ptrCast(this.data.mv_data);
     return ptr[0..this.data.mv_size];
