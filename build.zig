@@ -7,6 +7,8 @@ pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const use_llvm = b.option(bool, "llvm", "Use llvm (workaround fatal linker error)") orelse false;
+
     const no_run = b.option(bool, "no-run", "Don't run anything") orelse false;
     const no_install = b.option(bool, "no-install", "Don't install anything") orelse false;
 
@@ -54,7 +56,7 @@ pub fn build(b: *Build) !void {
 
     const unit_tests = b.addTest(.{
         .root_module = test_mod,
-        .use_llvm = false,
+        .use_llvm = use_llvm,
         .filters = &.{test_filter},
     });
 
@@ -82,6 +84,7 @@ pub fn build(b: *Build) !void {
         const exe = b.addExecutable(.{
             .name = name,
             .root_module = module,
+            .use_llvm = use_llvm,
         });
 
         const exe_run = b.addRunArtifact(exe);
@@ -145,7 +148,6 @@ fn makeLmdbC(
 ) *Build.Module {
     const translate = b.addTranslateC(.{
         .root_source_file = upstream.path("libraries/liblmdb/lmdb.h"),
-        .use_clang = true,
         .link_libc = true,
 
         .target = target,
