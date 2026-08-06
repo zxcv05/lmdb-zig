@@ -93,25 +93,46 @@ pub fn sync(this: Env, force: bool) !void {
 
 /// Open a database
 /// Also see `Dbi.init()`
-pub fn open(this: Env, txn: Txn, name: ?[:0]const u8, flags: Dbi.InitFlags) !Dbi {
+pub fn open(
+    this: Env,
+    txn: Txn.ReadWrite,
+    name: ?[:0]const u8,
+    flags: Dbi.InitFlags,
+) !Dbi {
     _ = this;
     return Dbi.init(txn, name, flags);
 }
 
+fn TxnType(comptime access: Txn.Access) type {
+    return switch (access) {
+        .read_only => Txn.ReadOnly,
+        .read_write => Txn.ReadWrite,
+    };
+}
+
 /// Create a transaction
 /// Also see `Txn.init()`
-pub fn begin(this: Env, src: std.builtin.SourceLocation, access: Txn.Access, flags: Txn.InitFlags) !Txn {
-    return Txn.init(this, src, null, access, flags);
+pub fn begin(
+    this: Env,
+    comptime access: Txn.Access,
+    flags: Txn.InitFlags,
+) !TxnType(access) {
+    return TxnType(access){ .base = try .init(this, null, access, flags) };
 }
 
 /// Create a nested transaction
 /// Also see `Txn.init()`
-pub fn begin_nested(this: Env, src: std.builtin.SourceLocation, parent: *Txn, access: Txn.Access, flags: Txn.InitFlags) !Txn {
-    return Txn.init(this, src, parent, access, flags);
+pub fn beginNested(
+    this: Env,
+    parent: *Txn,
+    comptime access: Txn.Access,
+    flags: Txn.InitFlags,
+) !TxnType(access) {
+    return TxnType(access){ .base = try .init(this, parent, access, flags) };
 }
 
 /// See `http://www.lmdb.tech/doc/group__mdb.html#ga5040d0de1f14000fa01fc0b522ff1f86`
-pub fn copy_to_fd(this: Env, fd: std.posix.fd_t, flags: CopyFlags) !void {
+pub fn copy2fd(this: Env, fd: std.posix.fd_t, flags: CopyFlags) !void {
     var flags_int: c_uint = 0;
     inline for (std.meta.fields(CopyFlags)) |flag| {
         if (@field(flags, flag.name))
@@ -122,19 +143,19 @@ pub fn copy_to_fd(this: Env, fd: std.posix.fd_t, flags: CopyFlags) !void {
         return error.Copyfd2Failed;
 }
 
-pub fn get_stats(this: Env) c.MDB_stat {
+pub fn stats(this: Env) c.MDB_stat {
     var stat: c.MDB_stat = undefined;
     _ = c.mdb_env_stat(this.inner, &stat);
     return stat;
 }
 
-pub fn get_info(this: Env) c.MDB_envinfo {
+pub fn info(this: Env) c.MDB_envinfo {
     var envinfo: c.MDB_envinfo = undefined;
     _ = c.mdb_env_info(this.inner, &envinfo);
     return envinfo;
 }
 
-pub fn get_fd(this: Env) std.posix.fd_t {
+pub fn getFd(this: Env) std.posix.fd_t {
     var fd: std.posix.fd_t = undefined;
     _ = c.mdb_env_get_fd(this.inner, &fd);
     return fd;

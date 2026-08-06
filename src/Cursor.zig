@@ -21,68 +21,28 @@ const log = std.log.scoped(.lmdb);
 const Cursor = @This();
 
 inner: *c.MDB_cursor,
-debug: if (utils.DEBUG) Debug else void,
 
 /// Cursor inherits `txn`s access mode, must not outlive `txn`
-pub fn init(src: std.builtin.SourceLocation, dbi: Dbi, txn: *const Txn) !Cursor {
-    if (utils.DEBUG and txn.debug.children > 0) {
-        utils.printWithSrc(
-            src,
-            "Cursor.init() called with txn that has {d} children",
-            .{txn.debug.children},
-        );
-        return error.TxnHasChildren;
-    }
-
+pub fn init(dbi: Dbi, txn: Txn) !Cursor {
     var ptr: ?*c.MDB_cursor = null;
 
     switch (root.errno(
         c.mdb_cursor_open(txn.inner, dbi.handle, &ptr),
     )) {
-        .SUCCESS => return .{
-            .inner = ptr.?,
-            .debug = if (utils.DEBUG) .{
-                .access = txn.debug.access,
-                .src = src,
-                .owner = txn,
-            },
-        },
+        .SUCCESS => return .{ .inner = ptr.? },
         else => |rc| return root.lmdbUnhandledError(@src(), rc),
     }
 }
 
 /// Please see top-level comment for usage information
 pub fn deinit(this: Cursor) void {
-    if (utils.DEBUG) {
-        switch (this.debug.owner.status) {
-            .open, .reset => {},
-            .aborted, .committed => if (this.debug.access == .read_write) {
-                utils.printWithSrc(
-                    this.debug.src,
-                    "deinit() called on {t} cursor whose owning txn is already {t} (skipping)",
-                    .{ this.debug.access, this.debug.owner.status },
-                );
-                return;
-            },
-            .invalid => return,
-        }
-    }
-
     c.mdb_cursor_close(this.inner);
 }
 
 /// Renew a read-only cursor
-pub fn renew(this: *Cursor, txn: *const Txn) !void {
-    if (utils.DEBUG and this.debug.access != .read_only) {
-        utils.printWithSrc(this.debug.src, "renew() called on read_write cursor", .{});
-        return error.BadAccess;
-    }
-
-    if (c.mdb_cursor_renew(txn.inner, this.inner) != @intFromEnum(root.E.SUCCESS)) unreachable;
-
-    if (utils.DEBUG) {
-        this.debug.owner = txn;
-    }
+pub fn renew(this: Cursor, txn: Txn) void {
+    if (c.mdb_cursor_renew(txn.inner, this.inner) != @intFromEnum(root.E.SUCCESS))
+        unreachable;
 }
 
 /// Warning: Errors will be treated as "Not found" and will return null
@@ -91,7 +51,7 @@ pub fn get(this: Cursor, op: GetOp, key: ?[]const u8, data: ?[]const u8) ?Kv {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
-    const found = this.get_impl(@intFromEnum(op), c_key.alias(), c_data.alias());
+    const found = this.getImpl(@intFromEnum(op), c_key.alias(), c_data.alias());
     if (!found) return null;
 
     return .{
@@ -101,7 +61,7 @@ pub fn get(this: Cursor, op: GetOp, key: ?[]const u8, data: ?[]const u8) ?Kv {
 }
 
 /// Warning: Errors will be treated as "Not found" and will return null
-pub fn get_multiple(
+pub fn getMultiple(
     this: Cursor,
     comptime T: type,
     op: GetMultipleOp,
@@ -110,7 +70,7 @@ pub fn get_multiple(
     var c_key: Val = .from_const(key);
     var c_data: Val = .empty;
 
-    const found = this.get_impl(@intFromEnum(op), c_key.alias(), c_data.alias());
+    const found = this.getImpl(@intFromEnum(op), c_key.alias(), c_data.alias());
     if (!found) return null;
 
     const num_elems = @divExact(c_data.data.mv_size, @sizeOf(T));
@@ -120,123 +80,86 @@ pub fn get_multiple(
 }
 
 /// returns true if data found, false if not found or error occured
-fn get_impl(this: Cursor, op: c_uint, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val) bool {
+fn getImpl(this: Cursor, op: c_uint, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val) bool {
     return c.mdb_cursor_get(this.inner, c_key, c_data, op) >= 0;
 }
 
-pub const get_iter = GetIterator.init;
+pub const iterator = GetIterator.init;
 
 pub fn put(this: Cursor, key: []const u8, data: []const u8) !void {
-    if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "put() called on read_only cursor", .{});
-        return error.BadAccess;
-    }
-
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
-    return this.put_impl(c_key.alias(), c_data.alias(), 0);
+    return this.putImpl(c_key.alias(), c_data.alias(), 0);
 }
 
 /// `put()` with `current` flag
 /// key must match item at the current cursor position
-pub fn put_replace(this: Cursor, key: []const u8, data: []const u8) !void {
-    if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "put_replace() called on read_only cursor", .{});
-        return error.BadAccess;
-    }
-
+pub fn putReplace(this: Cursor, key: []const u8, data: []const u8) !void {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
-    return this.put_impl(c_key.alias(), c_data.alias(), root.all_flags.current);
+    return this.putImpl(c_key.alias(), c_data.alias(), root.all_flags.current);
 }
 
 /// `put()` with `no_dup_data` flag
 /// supported for DUPSORT databases
-pub fn put_no_clobber(this: Cursor, key: []const u8, data: []const u8) !void {
-    if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "put_no_clobber() called on read_only cursor", .{});
-        return error.BadAccess;
-    }
-
+pub fn putNoClobber(this: Cursor, key: []const u8, data: []const u8) !void {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
-    return this.put_impl(c_key.alias(), c_data.alias(), root.all_flags.no_dup_data);
+    return this.putImpl(c_key.alias(), c_data.alias(), root.all_flags.no_dup_data);
 }
 
 /// `put()` with `no_overwrite` flag
 /// will put data (if not existing) or return it (if existing)
-pub fn put_get(this: Cursor, key: []const u8, data: []const u8) ![]u8 {
-    if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "put_get() called on read_only cursor", .{});
-        return error.BadAccess;
-    }
-
+pub fn putGet(this: Cursor, key: []const u8, data: []const u8) ![]u8 {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
-    this.put_impl(c_key.alias(), c_data.alias(), root.all_flags.no_overwrite) catch |e| switch (e) {
-        error.AlreadyExists => {},
+    this.putImpl(c_key.alias(), c_data.alias(), root.all_flags.no_overwrite) catch |e| switch (e) {
+        error.AlreadyExists => return c_data.unalias(),
         else => return e,
     };
-
-    return c_data.unalias();
 }
 
 /// `put()` with `append` flag
 /// must be sorted
-pub fn put_append(this: Cursor, key: []const u8, data: []const u8) !void {
-    if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "put_append() called on read_only cursor", .{});
-        return error.BadAccess;
-    }
-
+pub fn putAppend(this: Cursor, key: []const u8, data: []const u8) !void {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
-    return this.put_impl(c_key.alias(), c_data.alias(), root.all_flags.append) catch |e| switch (e) {
-        error.AlreadyExists => error.Unsorted,
-        else => e,
+    this.putImpl(c_key.alias(), c_data.alias(), root.all_flags.append) catch |e| switch (e) {
+        error.AlreadyExists => return error.Unsorted,
+        else => return e,
     };
 }
 
 /// `put()` with `append_dup` flag
 /// supported for DUPSORT databases
-pub fn put_append_dup(this: Cursor, key: []const u8, data: []const u8) !void {
-    if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "put_append_dup() called on read_only cursor", .{});
-        return error.BadAccess;
-    }
-
+pub fn putAppendDup(this: Cursor, key: []const u8, data: []const u8) !void {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
-    return this.put_impl(c_key.alias(), c_data.alias(), root.all_flags.append_dup) catch |e| switch (e) {
-        error.AlreadyExists => error.Unsorted,
-        else => e,
+    this.putImpl(c_key.alias(), c_data.alias(), root.all_flags.append_dup) catch |e| switch (e) {
+        error.AlreadyExists => return error.Unsorted,
+        else => return e,
     };
 }
 
 /// `put()` with `reserve` flag
-/// NOT supported for DUPSORT databased
-pub fn put_reserve(this: Cursor, key: []const u8, size: usize) ![]u8 {
-    if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "put_reserve() called on read_only cursor", .{});
-        return error.BadAccess;
-    }
-
+/// NOT supported for DUPSORT databases
+pub fn putReserve(this: Cursor, key: []const u8, size: usize) ![]u8 {
     var c_key: Val = .from_const(key);
     var c_data: Val = .of_size(size);
 
-    try this.put_impl(c_key.alias(), c_data.alias(), root.all_flags.reserve);
+    try this.putImpl(c_key.alias(), c_data.alias(), root.all_flags.reserve);
     return c_data.unalias();
 }
 
 /// `put()` with `multiple` flag
 /// supported for DUPFIXED databases
-pub fn put_multiple(this: Cursor, comptime T: type, key: []const u8, data: []const T) !usize {
+pub fn putMultiple(this: Cursor, comptime T: type, key: []const u8, data: []const T) !usize {
     var data_actual: [2]c.MDB_val = .{
         .{ .mv_size = @sizeOf(T), .mv_data = @ptrCast(@constCast(data.ptr)) },
         .{ .mv_size = data.len, .mv_data = undefined },
@@ -244,61 +167,50 @@ pub fn put_multiple(this: Cursor, comptime T: type, key: []const u8, data: []con
 
     var c_key: Val = .from_const(key);
 
-    try this.put_impl(c_key.alias(), @ptrCast(&data_actual), root.all_flags.multiple);
+    try this.putImpl(c_key.alias(), @ptrCast(&data_actual), root.all_flags.multiple);
     return data_actual[1].mv_size;
 }
 
-fn put_impl(this: Cursor, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags: c_uint) !void {
+fn putImpl(this: Cursor, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags: c_uint) !void {
     return switch (root.errno(
         c.mdb_cursor_put(this.inner, c_key, c_data, flags),
     )) {
         .SUCCESS => {},
-        .MAP_FULL => error.MapFull,
-        .TXN_FULL => error.TxnFull,
-        .KEYEXIST => error.AlreadyExists,
-        .INCOMPATIBLE => error.Incompatible,
+        .MAP_FULL => return error.MapFull,
+        .TXN_FULL => return error.TxnFull,
+        .KEYEXIST => return error.AlreadyExists,
+        .INCOMPATIBLE => return error.Incompatible,
 
-        else => |rc| root.lmdbUnhandledError(@src(), rc),
+        else => |rc| return root.lmdbUnhandledError(@src(), rc),
 
         _ => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
-            .ACCES => error.ReadOnly,
-            .INVAL => error.Invalid,
-
-            else => root.lmdbUnhandledError(@src(), rc),
+            .ACCES => return error.ReadOnly,
+            .INVAL => return error.Invalid,
+            else => return root.lmdbUnhandledError(@src(), rc),
         },
     };
 }
 
 /// Delete current key/data pair
 pub fn del(this: Cursor) !void {
-    if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "del() called on read_only cursor", .{});
-        return error.BadAccess;
-    }
-
-    return this.del_impl(0);
+    return this.delImpl(0);
 }
 
 /// Delete all items for current key
 /// supported for DUPSORT databases
-pub fn del_all(this: Cursor) !void {
-    if (utils.DEBUG and this.debug.access != .read_write) {
-        utils.printWithSrc(this.debug.src, "del_all() called on read_only cursor", .{});
-        return error.BadAccess;
-    }
-
-    return this.del_impl(root.all_flags.no_dup_data);
+pub fn delAll(this: Cursor) !void {
+    return this.delImpl(root.all_flags.no_dup_data);
 }
 
-fn del_impl(this: Cursor, flags: c_uint) !void {
+fn delImpl(this: Cursor, flags: c_uint) !void {
     return switch (@as(std.posix.E, @enumFromInt(
         c.mdb_cursor_del(this.inner, flags),
     ))) {
         .SUCCESS => {},
-        .ACCES => error.ReadOnly,
-        .INVAL => error.Invalid,
+        .ACCES => return error.ReadOnly,
+        .INVAL => return error.Invalid,
 
-        else => |rc| root.lmdbUnhandledError(@src(), rc),
+        else => |rc| return root.lmdbUnhandledError(@src(), rc),
     };
 }
 
@@ -309,12 +221,6 @@ pub fn count(this: Cursor) ?usize {
     if (c.mdb_cursor_count(this.inner, &ret) != @intFromEnum(root.E.SUCCESS)) return null;
     return @intCast(ret);
 }
-
-const Debug = struct {
-    access: Txn.Access,
-    src: std.builtin.SourceLocation,
-    owner: *const Txn,
-};
 
 pub const Kv = struct { []const u8, []const u8 };
 
@@ -353,13 +259,13 @@ pub const DelFlags = packed struct {
 };
 
 pub const GetIterator = struct {
-    owner: *const Cursor,
+    owner: Cursor,
     c_key: Val,
     c_data: Val,
     state: State,
 
     pub fn init(
-        cursor: *const Cursor,
+        cursor: Cursor,
         init_op: GetOp,
         init_key: ?[]const u8,
         init_data: ?[]const u8,
@@ -372,7 +278,7 @@ pub const GetIterator = struct {
             .state = .{ .next_op = next_op },
         };
 
-        this.state.found = cursor.get_impl(
+        this.state.found = cursor.getImpl(
             @intFromEnum(init_op),
             this.c_key.alias(),
             this.c_data.alias(),
@@ -385,7 +291,7 @@ pub const GetIterator = struct {
 
         if (this.state.skip) {
             this.state.skip = false;
-        } else if (!this.owner.get_impl(
+        } else if (!this.owner.getImpl(
             @intFromEnum(this.state.next_op),
             this.c_key.alias(),
             this.c_data.alias(),
@@ -405,4 +311,124 @@ pub const GetIterator = struct {
         skip: bool = true,
         found: bool = false,
     };
+};
+
+/// Holds pages returned by `get` alive until `deinit`
+pub const ReadOnly = struct {
+    base: Cursor,
+
+    pub fn deinit(this: ReadOnly) void {
+        this.base.deinit();
+    }
+
+    pub inline fn renew(this: ReadOnly, txn: Txn) void {
+        this.base.renew(txn);
+    }
+
+    pub inline fn get(this: ReadOnly, op: GetOp, k: ?[]const u8, d: ?[]const u8) ?Kv {
+        return this.base.get(op, k, d);
+    }
+
+    pub inline fn getMultiple(
+        this: ReadOnly,
+        comptime T: type,
+        op: GetMultipleOp,
+        k: ?[]const u8,
+    ) ?[]align(1) const T {
+        return this.base.getMultiple(T, op, k);
+    }
+
+    pub inline fn iterator(
+        this: ReadOnly,
+        init_op: GetOp,
+        k: ?[]const u8,
+        d: ?[]const u8,
+        next_op: GetOp,
+    ) GetIterator {
+        return this.base.iterator(init_op, k, d, next_op);
+    }
+
+    /// for use with DUPSORT databases only
+    pub inline fn count(this: ReadOnly) ?usize {
+        return this.base.count();
+    }
+};
+
+/// Automatically deinitialized by the owning transaction
+/// Memory returned by `get` is invalidated by the next `get` call
+pub const ReadWrite = struct {
+    base: Cursor,
+
+    pub inline fn get(this: ReadWrite, op: GetOp, k: ?[]const u8, d: ?[]const u8) ?Kv {
+        return this.base.get(op, k, d);
+    }
+
+    pub inline fn getMultiple(
+        this: ReadWrite,
+        comptime T: type,
+        op: GetMultipleOp,
+        k: ?[]const u8,
+    ) ?[]align(1) const T {
+        return this.base.getMultiple(T, op, k);
+    }
+
+    pub inline fn iterator(
+        this: ReadWrite,
+        init_op: GetOp,
+        k: ?[]const u8,
+        d: ?[]const u8,
+        next_op: GetOp,
+    ) GetIterator {
+        return this.base.iterator(init_op, k, d, next_op);
+    }
+
+    /// for use with DUPSORT databases only
+    pub inline fn count(this: ReadWrite) ?usize {
+        return this.base.count();
+    }
+
+    pub inline fn put(this: ReadWrite, k: []const u8, d: []const u8) !void {
+        return this.base.put(k, d);
+    }
+
+    pub inline fn putAppend(this: ReadWrite, k: []const u8, d: []const u8) !void {
+        return this.base.putAppend(k, d);
+    }
+
+    pub inline fn putAppendDup(this: ReadWrite, k: []const u8, d: []const u8) !void {
+        return this.base.putAppendDup(k, d);
+    }
+
+    pub inline fn putGet(this: ReadWrite, k: []const u8, d: []const u8) ![]u8 {
+        return this.base.putGet(k, d);
+    }
+
+    pub inline fn putNoClobber(this: ReadWrite, k: []const u8, d: []const u8) !void {
+        return this.base.putNoClobber(k, d);
+    }
+
+    pub inline fn putReplace(this: ReadWrite, k: []const u8, d: []const u8) !void {
+        return this.base.putReplace(k, d);
+    }
+
+    pub inline fn putReserve(this: ReadWrite, k: []const u8, size: usize) ![]u8 {
+        return this.base.putReserve(k, size);
+    }
+
+    pub inline fn putMultiple(
+        this: ReadWrite,
+        comptime T: type,
+        k: []const u8,
+        d: []const T,
+    ) !usize {
+        return this.base.putMultiple(T, k, d);
+    }
+
+    pub inline fn del(this: ReadWrite) !void {
+        return this.base.del();
+    }
+
+    pub inline fn delAll(this: ReadWrite) !void {
+        return this.base.delAll();
+    }
 };

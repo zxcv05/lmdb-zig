@@ -57,11 +57,11 @@ fn example(
 ) !void {
     const env: lmdb.Env = try .init(dbpath, .{
         .max_dbs = 8,
-        .map_size = @sizeOf(usize) * kvs * 8,
+        .map_size = @min(kvs * 256, 1024 * 1024),
     });
     defer env.deinit();
 
-    var txn = try env.begin(@src(), .read_write, .{});
+    var txn = try env.begin(.read_write, .{});
     defer txn.abort();
 
     const dbi = try env.open(txn, dbname, .{ .create = true, .dup_sort = true });
@@ -69,7 +69,7 @@ fn example(
     for (0..kvs) |i| {
         const key = std.mem.nativeToBig(usize, i);
         const val = rand.int(usize);
-        try dbi.put(txn, std.mem.asBytes(&key), std.mem.asBytes(&val));
+        try txn.put(dbi, std.mem.asBytes(&key), std.mem.asBytes(&val));
     }
 
     try txn.commit();
