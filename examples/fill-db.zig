@@ -2,14 +2,8 @@ const std = @import("std");
 const lmdb = @import("lmdb");
 const builtin = @import("builtin");
 
-pub const main = switch (builtin.zig_version.minor) {
-    15 => main_15,
-    16 => main_16,
-    else => @compileError("Unsupported zig version: " ++ builtin.zig_version_string),
-};
-
-// tested with zig 0.16.0-dev.2722+f16eb18ce
-fn main_16(init: std.process.Init) !void {
+// tested with zig 0.17.0
+pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const gpa = init.gpa;
     const clock = std.Io.Clock.real;
@@ -20,24 +14,6 @@ fn main_16(init: std.process.Init) !void {
 
     var args = try init.minimal.args.iterateAllocator(gpa);
     defer args.deinit();
-
-    _ = args.skip(); // cmdline
-    const kvs_str = args.next() orelse return error.HowManyKeyValues;
-    const dbpath = args.next() orelse return error.GiveMeDbPath;
-    const dbname = args.next();
-
-    const kvs = try std.fmt.parseInt(usize, kvs_str, 0) + 1;
-
-    return example(rand, kvs, dbpath, dbname);
-}
-
-// tested with zig 0.15.1
-fn main_15() !void {
-    const rng_seed: u64 = @truncate(@abs(std.time.nanoTimestamp()));
-    var rng: std.Random.DefaultPrng = .init(rng_seed);
-    const rand = rng.random();
-
-    var args = std.process.args();
 
     _ = args.skip(); // cmdline
     const kvs_str = args.next() orelse return error.HowManyKeyValues;

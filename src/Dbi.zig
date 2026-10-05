@@ -25,9 +25,10 @@ pub fn init(txn: Txn.ReadWrite, name: ?[:0]const u8, flags: InitFlags) !Dbi {
     }
 
     var flags_int: c_uint = 0;
-    inline for (std.meta.fields(InitFlags)) |flag| {
-        if (@field(flags, flag.name))
-            flags_int |= @field(root.all_flags, flag.name);
+    const names = @typeInfo(InitFlags).@"struct".field_names;
+    inline for (names) |field| {
+        if (@field(flags, field))
+            flags_int |= @field(root.all_flags, field);
     }
 
     var dbi: c.MDB_dbi = undefined;
@@ -47,14 +48,14 @@ pub fn init(txn: Txn.ReadWrite, name: ?[:0]const u8, flags: InitFlags) !Dbi {
 
 pub fn stats(this: Dbi, txn: Txn) c.MDB_stat {
     var stat: c.MDB_stat = undefined;
-    if (c.mdb_stat(txn.inner, this.handle, &stat) != @intFromEnum(root.E.SUCCESS)) unreachable;
+    if (c.mdb_stat(txn.inner, this.handle, &stat) != @backingInt(root.E.SUCCESS)) unreachable;
     return stat;
 }
 
 /// Deletes all data contained in database, doesnt free handle
 /// Returns true on success
 pub fn emptyContents(this: Dbi, txn: Txn) bool {
-    return c.mdb_drop(txn.inner, this.handle, 0) == @intFromEnum(root.E.SUCCESS);
+    return c.mdb_drop(txn.inner, this.handle, 0) == @backingInt(root.E.SUCCESS);
 }
 
 /// This is unnecessary! Use with care!
@@ -79,7 +80,7 @@ pub fn freeHandle_CodeSmell(this: *Dbi, env: Env) void {
 /// Deletes database from the environment and frees handle
 /// Returns true on success
 pub fn emptyFreeHandle_CodeSmell(this: *Dbi, txn: Txn) bool {
-    if (c.mdb_drop(txn.inner, this.handle, 1) == @intFromEnum(root.E.SUCCESS)) {
+    if (c.mdb_drop(txn.inner, this.handle, 1) == @backingInt(root.E.SUCCESS)) {
         this.* = undefined;
         return true;
     }

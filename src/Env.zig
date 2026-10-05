@@ -39,14 +39,15 @@ pub fn init(path: [:0]const u8, options: InitOptions) !Env {
         options_rc |= c.mdb_env_set_maxdbs(env, @intCast(max_dbs));
     }
 
-    if (options_rc != @intFromEnum(root.E.SUCCESS)) return error.OptionsFailed;
+    if (options_rc != @backingInt(root.E.SUCCESS)) return error.OptionsFailed;
 
     // open db
 
     var flags_int: c_uint = 0;
-    inline for (std.meta.fields(InitFlags)) |flag| {
-        if (@field(options.flags, flag.name))
-            flags_int |= @field(root.all_flags, flag.name);
+    const names = @typeInfo(InitFlags).@"struct".field_names;
+    inline for (names) |name| {
+        if (@field(options.flags, name))
+            flags_int |= @field(root.all_flags, name);
     }
 
     return switch (root.errno(c.mdb_env_open(
@@ -61,7 +62,7 @@ pub fn init(path: [:0]const u8, options: InitOptions) !Env {
 
         else => |rc| root.lmdbUnhandledError(@src(), rc),
 
-        _ => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+        _ => |rc| switch (@as(std.posix.E, @fromBackingInt(@intCast(@backingInt(rc))))) {
             .NOTDIR => error.NotADirectory,
             .NOENT => error.PathDoesntExist,
             .ACCES => error.PermissionDenied,
@@ -79,9 +80,9 @@ pub fn deinit(this: Env) void {
 
 /// flush env to disk
 pub fn sync(this: Env, force: bool) !void {
-    switch (@as(std.posix.E, @enumFromInt(
+    switch (@as(std.posix.E, @fromBackingInt(@intCast(
         c.mdb_env_sync(this.inner, @intFromBool(force)),
-    ))) {
+    )))) {
         .SUCCESS => {},
         .ACCES => return error.ReadOnly,
         .INVAL => return error.Invalid,
@@ -139,7 +140,7 @@ pub fn copy2fd(this: Env, fd: std.posix.fd_t, flags: CopyFlags) !void {
             flags_int |= @field(root.all_flags, flag.name);
     }
 
-    if (c.mdb_env_copyfd2(this.inner, fd, flags_int) != @intFromEnum(root.E.SUCCESS))
+    if (c.mdb_env_copyfd2(this.inner, fd, flags_int) != @backingInt(root.E.SUCCESS))
         return error.Copyfd2Failed;
 }
 

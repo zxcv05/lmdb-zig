@@ -2,31 +2,14 @@ const std = @import("std");
 const lmdb = @import("lmdb");
 const builtin = @import("builtin");
 
-pub const main = switch (builtin.zig_version.minor) {
-    15 => main_15,
-    16 => main_16,
-    else => @compileError("Unsupported zig version: " ++ builtin.zig_version_string),
-};
-
-// tested with zig 0.16.0-dev.2722+f16eb18ce
-fn main_16(init: std.process.Init) !void {
+// tested with zig 0.17.0
+pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
 
     var args = try init.minimal.args.iterateAllocator(gpa);
     defer args.deinit();
 
     _ = args.skip();
-    const dbpath = args.next() orelse return error.GiveMeDbPath;
-    const dbname = args.next();
-
-    return example(dbpath, dbname);
-}
-
-// tested with zig 0.15.1
-fn main_15() !void {
-    var args = std.process.args();
-    _ = args.skip();
-
     const dbpath = args.next() orelse return error.GiveMeDbPath;
     const dbname = args.next();
 

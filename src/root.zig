@@ -75,7 +75,7 @@ pub const all_flags = struct {
 }; // zig fmt: on
 
 pub fn errno(rc: anytype) E {
-    return @enumFromInt(rc);
+    return @fromBackingInt(@intCast(rc));
 }
 
 pub const UnhandledError = error{UnknownError};
@@ -92,30 +92,16 @@ pub fn lmdbUnhandledError(
 
 test {
     try std.testing.expectEqual(
-        @intFromEnum(std.posix.E.SUCCESS),
-        @intFromEnum(E.SUCCESS),
+        @backingInt(std.posix.E.SUCCESS),
+        @backingInt(E.SUCCESS),
     );
 
-    const builtin = @import("builtin");
+    const io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
 
-    // TODO: this hack only works because the test runner runs tests in order
-    switch (builtin.zig_version.minor) {
-        15 => {
-            const cwd = std.fs.cwd();
-            cwd.makeDir("testdb") catch {};
-            cwd.deleteFile("testdb/data.mdb") catch {};
-            cwd.deleteFile("testdb/lock.mdb") catch {};
-        },
-        16 => {
-            const io = std.testing.io;
-            const cwd = std.Io.Dir.cwd();
-
-            cwd.createDir(io, "testdb", .default_dir) catch {};
-            cwd.deleteFile(io, "testdb/data.mdb") catch {};
-            cwd.deleteFile(io, "testdb/lock.mdb") catch {};
-        },
-        else => return error.UnsupportedZigVersion,
-    }
+    cwd.createDir(io, "testdb", .default_dir) catch {};
+    cwd.deleteFile(io, "testdb/data.mdb") catch {};
+    cwd.deleteFile(io, "testdb/lock.mdb") catch {};
 
     _ = @This();
     _ = Txn;

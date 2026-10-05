@@ -28,9 +28,10 @@ pub fn init(
     if (parent) |ptxn| std.debug.assert(ptxn.status == .open);
 
     var flags_int: c_uint = 0;
-    inline for (std.meta.fields(InitFlags)) |flag| {
-        if (@field(flags, flag.name))
-            flags_int |= @field(root.all_flags, flag.name);
+    const names = @typeInfo(InitFlags).@"struct".field_names;
+    inline for (names) |name| {
+        if (@field(flags, name))
+            flags_int |= @field(root.all_flags, name);
     }
     if (access == .read_only) flags_int |= root.all_flags.read_only;
 
@@ -49,7 +50,7 @@ pub fn init(
 
         else => |rc| root.lmdbUnhandledError(@src(), rc),
 
-        _ => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+        _ => |rc| switch (@as(std.posix.E, @fromBackingInt(@intCast(@backingInt(rc))))) {
             // If NO_TLS isnt set on the Env then only one read only txn per thread is allowed
             .INVAL => error.BlockedByReadOnlyTxn,
             .NOMEM => error.OutOfMemory,
@@ -69,9 +70,9 @@ pub fn commit(this: *Txn) !void {
         else => unreachable,
     }
 
-    return switch (@as(std.posix.E, @enumFromInt(
+    return switch (@as(std.posix.E, @fromBackingInt(@intCast(
         c.mdb_txn_commit(this.inner),
-    ))) {
+    )))) {
         .SUCCESS => this.status = .committed,
         .INVAL => {
             this.status = .invalid;
@@ -139,7 +140,7 @@ pub fn get(txn: Txn, dbi: Dbi, key: []const u8) !?[]u8 {
 
         else => |rc| return root.lmdbUnhandledError(@src(), rc),
 
-        _ => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+        _ => |rc| switch (@as(std.posix.E, @fromBackingInt(@intCast(@backingInt(rc))))) {
             .INVAL => return error.Invalid,
             else => return root.lmdbUnhandledError(@src(), rc),
         },
@@ -231,7 +232,7 @@ fn putImpl(txn: Txn, dbi: Dbi, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags: c
 
         else => |rc| return root.lmdbUnhandledError(@src(), rc),
 
-        _ => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+        _ => |rc| switch (@as(std.posix.E, @fromBackingInt(@intCast(@backingInt(rc))))) {
             .ACCES => return error.ReadOnly,
             .INVAL => return error.Invalid,
 
@@ -258,7 +259,7 @@ pub fn del(txn: Txn, dbi: Dbi, key: []const u8, data: ?[]const u8) !bool {
 
         else => |rc| return root.lmdbUnhandledError(@src(), rc),
 
-        _ => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+        _ => |rc| switch (@as(std.posix.E, @fromBackingInt(@intCast(@backingInt(rc))))) {
             .ACCES => return error.ReadOnly,
             .INVAL => return error.Invalid,
             else => return root.lmdbUnhandledError(@src(), rc),

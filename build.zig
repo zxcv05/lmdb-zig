@@ -3,6 +3,8 @@ const Build = std.Build;
 
 const EXAMPLES = [_][]const u8{ "dump-db", "fill-db" };
 
+const zig_is_17 = @hasDecl(std, "lang");
+
 pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -88,7 +90,11 @@ pub fn build(b: *Build) !void {
         });
 
         const exe_run = b.addRunArtifact(exe);
-        if (b.args) |args| exe_run.addArgs(args);
+        if (zig_is_17) {
+            exe_run.addPassthruArgs();
+        } else {
+            if (b.args) |args| exe_run.addArgs(args);
+        }
 
         const exe_run_step = b.step("example-" ++ name, "Run example '" ++ name ++ "'");
         exe_run_step.dependOn(&exe_run.step);
