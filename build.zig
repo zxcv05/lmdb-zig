@@ -14,6 +14,8 @@ pub fn build(b: *Build) !void {
     const no_run = b.option(bool, "no-run", "Don't run anything") orelse false;
     const no_install = b.option(bool, "no-install", "Don't install anything") orelse false;
 
+    const docs = b.option(bool, "emit-docs", "Emit documentation") orelse false;
+
     const test_filter = b.option([]const u8, "test-filter", "Filter tests") orelse "";
     const tests_use_system_lib = b.option(bool, "tests-use-system-lib", "Use globally installed 'lmdb' library for unit tests") orelse false;
 
@@ -38,6 +40,16 @@ pub fn build(b: *Build) !void {
     } else {
         const lmdb_lib_install = b.addInstallArtifact(lmdb_lib, .{});
         b.default_step.dependOn(&lmdb_lib_install.step);
+    }
+
+    if (docs) {
+        const lib = b.addLibrary(.{ .name = "lmdb", .root_module = root_mod });
+        const install = b.addInstallDirectory(.{
+            .source_dir = lib.getEmittedDocs(),
+            .install_dir = .prefix,
+            .install_subdir = "docs",
+        });
+        b.default_step.dependOn(&install.step);
     }
 
     // unit tests
