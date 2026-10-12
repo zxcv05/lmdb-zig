@@ -41,7 +41,7 @@ pub fn deinit(this: Cursor) void {
 
 /// Renew a read-only cursor
 pub fn renew(this: Cursor, txn: Txn) void {
-    if (c.mdb_cursor_renew(txn.inner, this.inner) != @intFromEnum(root.E.SUCCESS))
+    if (c.mdb_cursor_renew(txn.inner, this.inner) != @backingInt(root.E.SUCCESS))
         unreachable;
 }
 
@@ -51,7 +51,7 @@ pub fn get(this: Cursor, op: GetOp, key: ?[]const u8, data: ?[]const u8) ?Kv {
     var c_key: Val = .from_const(key);
     var c_data: Val = .from_const(data);
 
-    const found = this.getImpl(@intFromEnum(op), c_key.alias(), c_data.alias());
+    const found = this.getImpl(@backingInt(op), c_key.alias(), c_data.alias());
     if (!found) return null;
 
     return .{
@@ -70,7 +70,7 @@ pub fn getMultiple(
     var c_key: Val = .from_const(key);
     var c_data: Val = .empty;
 
-    const found = this.getImpl(@intFromEnum(op), c_key.alias(), c_data.alias());
+    const found = this.getImpl(@backingInt(op), c_key.alias(), c_data.alias());
     if (!found) return null;
 
     const num_elems = @divExact(c_data.data.mv_size, @sizeOf(T));
@@ -183,7 +183,7 @@ fn putImpl(this: Cursor, c_key: ?*c.MDB_val, c_data: ?*c.MDB_val, flags: c_uint)
 
         else => |rc| return root.lmdbUnhandledError(@src(), rc),
 
-        _ => |rc| switch (@as(std.posix.E, @enumFromInt(@intFromEnum(rc)))) {
+        _ => |rc| switch (@as(std.posix.E, @fromBackingInt(@intCast(@backingInt(rc))))) {
             .ACCES => return error.ReadOnly,
             .INVAL => return error.Invalid,
             else => return root.lmdbUnhandledError(@src(), rc),
@@ -203,9 +203,9 @@ pub fn delAll(this: Cursor) !void {
 }
 
 fn delImpl(this: Cursor, flags: c_uint) !void {
-    return switch (@as(std.posix.E, @enumFromInt(
+    return switch (@as(std.posix.E, @fromBackingInt(@intCast(
         c.mdb_cursor_del(this.inner, flags),
-    ))) {
+    )))) {
         .SUCCESS => {},
         .ACCES => return error.ReadOnly,
         .INVAL => return error.Invalid,
@@ -218,7 +218,7 @@ fn delImpl(this: Cursor, flags: c_uint) !void {
 /// supported for DUPSORT databases
 pub fn count(this: Cursor) ?usize {
     var ret: c_ulong = 0;
-    if (c.mdb_cursor_count(this.inner, &ret) != @intFromEnum(root.E.SUCCESS)) return null;
+    if (c.mdb_cursor_count(this.inner, &ret) != @backingInt(root.E.SUCCESS)) return null;
     return @intCast(ret);
 }
 
@@ -279,7 +279,7 @@ pub const GetIterator = struct {
         };
 
         this.state.found = cursor.getImpl(
-            @intFromEnum(init_op),
+            @backingInt(init_op),
             this.c_key.alias(),
             this.c_data.alias(),
         );
@@ -287,12 +287,16 @@ pub const GetIterator = struct {
     }
 
     pub fn next(this: *GetIterator) ?Kv {
+        return this.operate(this.state.next_op);
+    }
+
+    pub fn operate(this: *GetIterator, op: GetOp) ?Kv {
         if (!this.state.found) return null;
 
         if (this.state.skip) {
             this.state.skip = false;
         } else if (!this.owner.getImpl(
-            @intFromEnum(this.state.next_op),
+            @backingInt(op),
             this.c_key.alias(),
             this.c_data.alias(),
         )) {
