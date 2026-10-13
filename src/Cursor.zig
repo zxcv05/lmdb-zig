@@ -310,6 +310,11 @@ pub const GetIterator = struct {
         };
     }
 
+    pub fn reset(this: *GetIterator) void {
+        this.state.found = true;
+        this.state.skip = false;
+    }
+
     pub const State = struct {
         next_op: GetOp,
         skip: bool = true,
